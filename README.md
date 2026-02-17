@@ -4,8 +4,9 @@ AI-powered code review agent that runs locally via Ollama, with optional Claude/
 
 ## Features
 
-- 🤖 **Multiple LLM Backends** - Ollama (free/local), Claude (best quality), OpenAI
+- 🤖 **Multiple LLM Backends** - Ollama (free), Claude (best quality), OpenAI
 - 🔄 **Multi-platform** - GitHub and Azure DevOps support
+- 📍 **Inline Comments** - Reviews appear on specific lines in the PR diff
 - 📚 **Skills-based** - Review behavior driven by pluggable skills
 - 🚀 **Pipeline-triggered** - Runs in CI/CD, no continuously running service
 - 🔗 **Ticket-aware** - Links PRs to Jira/Linear tickets (Phase 3)
@@ -258,6 +259,18 @@ This content is injected into the LLM prompt.
 | `frontend` | `**/*.tsx`, `**/*.css` | React patterns, a11y, performance |
 | `backend` | `**/api/**`, `**/*.go` | API design, database, reliability |
 
+## Demo
+
+See inline comments in action:
+
+**Live Demo:** https://github.com/theashishmaurya/pr-review-test/pull/2
+
+The agent posted inline comments on specific lines:
+- Line 4: ⚠️ Input validation issue
+- Line 9: 💡 Missing error handling
+- Line 14: ⚠️ Security concern
+- Line 19: ⚠️ Edge case not handled
+
 ## How It Works
 
 ### Internal Flow
@@ -509,6 +522,7 @@ pr-review-agent/
 - [x] Ollama backend
 - [x] CLI skeleton
 - [x] Context builder
+- [x] Inline comments on specific lines
 
 ### Phase 2 ✅ (Complete)
 - [x] Claude backend
