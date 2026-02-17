@@ -235,12 +235,50 @@ export class GitHubAdapter implements VCSAdapter {
       pull_number: Number(prId)
     });
 
-    // Format comments for GitHub API (needs commit_id for line positioning)
-    const comments = review.comments.map(c => ({
-      path: c.path,
-      line: c.line,
-      body: c.body
-    }));
+    // Get the diff to find correct line positions
+    const diffResponse = await this.octokit.pulls.listFiles({
+      owner: this.owner,
+      repo: this.repo,
+      pull_number: Number(prId)
+    });
+
+    // Build a map of file -> changed lines for validation
+    const changedFiles = new Map<string, Set<number>>();
+    for (const file of diffResponse.data) {
+      if (file.changes && file.changes > 0) {
+        // Parse the patch to find changed line numbers
+        const changedLines = new Set<number>();
+        if (file.patch) {
+          const lines = file.patch.split('\n');
+          let currentLine = 0;
+          for (const line of lines) {
+            const hunkMatch = line.match(/@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+            if (hunkMatch) {
+              currentLine = parseInt(hunkMatch[1]);
+            } else if (line.startsWith('+') && !line.startsWith('+++')) {
+              changedLines.add(currentLine);
+              currentLine++;
+            } else if (!line.startsWith('-') && !line.startsWith('\\')) {
+              currentLine++;
+            }
+          }
+        }
+        changedFiles.set(file.filename, changedLines);
+      }
+    }
+
+    // Format comments for GitHub API - only include if line exists in diff
+    const comments = review.comments
+      .filter(c => {
+        const fileLines = changedFiles.get(c.path);
+        return fileLines && fileLines.has(c.line);
+      })
+      .map(c => ({
+        path: c.path,
+        line: c.line,
+        body: c.body,
+        side: 'RIGHT' as const
+      }));
 
     const eventMap: Record<string, 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT'> = {
       approve: 'APPROVE',
