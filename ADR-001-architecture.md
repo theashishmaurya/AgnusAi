@@ -1,15 +1,15 @@
 # ADR-001: PR Review Agent Architecture
 
 ## Status
-Proposed
+**Implemented** ✅
 
 ## Context
 
-We need an AI-powered PR review agent that:
+We built an AI-powered PR review agent that:
 - Reviews pull requests on **GitHub** and **Azure DevOps**
-- Adds meaningful review comments
-- References related tickets (Jira, Linear, GitHub Issues, Azure Boards)
-- Runs locally via **Claude Code + Ollama**
+- Posts **inline comments** on specific lines in the diff
+- Adds meaningful review comments with verdicts
+- Runs locally via **Ollama** (with Claude/OpenAI backends available)
 - Integrates into CI/CD pipelines
 
 ### Constraints
