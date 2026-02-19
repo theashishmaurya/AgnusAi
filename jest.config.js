@@ -4,15 +4,12 @@ module.exports = {
   testEnvironment: 'node',
   roots: ['<rootDir>/__tests__'],
   testMatch: ['**/*.test.ts'],
-  moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json', 'node'],
+  moduleFileExtensions: ['ts', 'js', 'json'],
   collectCoverageFrom: [
     'src/**/*.ts',
     '!src/**/*.d.ts',
-    '!src/cli.ts'
+    '!src/**/index.ts'
   ],
   coverageDirectory: 'coverage',
-  verbose: true,
-  moduleNameMapper: {
-    '^../src/(.*)$': '<rootDir>/src/$1'
-  }
+  verbose: true
 };

@@ -17,3 +17,27 @@ export {
   CHECKPOINT_USER_AGENT
 } from './checkpoint';
 export type { default as CheckpointModule } from './checkpoint';
+
+// Thread handling for comment replies
+export {
+  AGNUSAI_MARKER,
+  isAgnusaiComment,
+  extractOriginalIssue,
+  addAgnusaiMarker,
+  isReplyToComment,
+  buildCommentThread,
+} from './thread';
+export type {
+  CommentThread,
+  GitHubComment,
+  ReviewCommentWebhookPayload,
+} from './thread';
+
+// Reply generation
+export {
+  generateReply,
+  generateAcknowledgment,
+  isDismissal,
+  generateDismissalResponse,
+} from './reply';
+export type { ReplyContext } from './reply';

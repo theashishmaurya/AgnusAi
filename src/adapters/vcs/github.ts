@@ -14,8 +14,10 @@ import {
   FileDiff,
   CommitComparison,
   PRComment,
-  ReviewCheckpoint
+  ReviewCheckpoint,
+  DetailedReviewComment
 } from '../../types';
+import { AGNUSAI_MARKER } from '../../review/thread';
 
 interface GitHubConfig {
   token: string;
@@ -190,6 +192,71 @@ export class GitHubAdapter implements VCSAdapter {
     return langMap[ext] || 'text';
   }
 
+  /**
+   * Add the AgnusAI marker to a comment body
+   * This identifies our comments for reply handling
+   */
+  private addAgnusaiMarker(body: string): string {
+    // Don't add marker if already present
+    if (body.trim().endsWith(AGNUSAI_MARKER)) {
+      return body;
+    }
+    return `${body.trim()}\n\n${AGNUSAI_MARKER}`;
+  }
+
+  /**
+   * Create a reply to a review comment
+   * GitHub only allows one level of replies (no nested threads)
+   * 
+   * @param prId PR number
+   * @param commentId The root comment ID to reply to
+   * @param body The reply body
+   */
+  async createReply(
+    prId: string | number,
+    commentId: number,
+    body: string
+  ): Promise<void> {
+    const markedBody = this.addAgnusaiMarker(body);
+    
+    await this.octokit.pulls.createReplyForReviewComment({
+      owner: this.owner,
+      repo: this.repo,
+      pull_number: Number(prId),
+      comment_id: commentId,
+      body: markedBody
+    });
+  }
+
+  /**
+   * Get a specific review comment by ID
+   * Useful for checking if a comment is from AgnusAI
+   * 
+   * @param commentId The review comment ID
+   * @returns The comment data
+   */
+  async getReviewComment(commentId: number): Promise<{
+    id: number;
+    body: string;
+    user: { login: string } | null;
+    path?: string;
+    line?: number;
+  }> {
+    const { data: comment } = await this.octokit.pulls.getReviewComment({
+      owner: this.owner,
+      repo: this.repo,
+      comment_id: commentId
+    });
+
+    return {
+      id: comment.id,
+      body: comment.body || '',
+      user: comment.user ? { login: comment.user.login } : null,
+      path: comment.path,
+      line: comment.line ?? undefined
+    };
+  }
+
   async addComment(prId: string | number, comment: ReviewComment): Promise<void> {
     await this.octokit.issues.createComment({
       owner: this.owner,
@@ -271,6 +338,7 @@ export class GitHubAdapter implements VCSAdapter {
     }
 
     // Format comments for GitHub API - only include if line exists in diff
+    // Add AgnusAI marker to each comment for reply detection
     const comments = review.comments
       .filter(c => {
         const fileLines = changedFiles.get(c.path);
@@ -279,7 +347,7 @@ export class GitHubAdapter implements VCSAdapter {
       .map(c => ({
         path: c.path,
         line: c.line,
-        body: c.body,
+        body: this.addAgnusaiMarker(c.body),
         side: 'RIGHT' as const
       }));
 
@@ -461,28 +529,57 @@ export class GitHubAdapter implements VCSAdapter {
 
   /**
    * Get all review comments on a PR (inline comments on code)
+   * Handles pagination to fetch ALL comments
    * 
    * @param prId PR number
-   * @returns List of review comments
+   * @returns List of detailed review comments
    */
-  async getReviewComments(prId: string | number): Promise<PRComment[]> {
-    const { data: comments } = await this.octokit.pulls.listReviewComments({
-      owner: this.owner,
-      repo: this.repo,
-      pull_number: Number(prId),
-      per_page: 100
-    });
+  async getReviewComments(prId: string | number): Promise<DetailedReviewComment[]> {
+    const comments: DetailedReviewComment[] = [];
+    let page = 1;
+    const perPage = 100;
+    let hasMore = true;
+    
+    while (hasMore) {
+      const { data: pageComments } = await this.octokit.pulls.listReviewComments({
+        owner: this.owner,
+        repo: this.repo,
+        pull_number: Number(prId),
+        per_page: perPage,
+        page
+      });
+      
+      for (const comment of pageComments) {
+        comments.push({
+          id: comment.id,
+          body: comment.body || '',
+          user: {
+            login: comment.user?.login || 'unknown',
+            type: comment.user?.type || 'User'
+          },
+          path: comment.path,
+          line: comment.line ?? comment.original_line ?? null,
+          originalLine: comment.original_line ?? null,
+          position: comment.position ?? null,
+          commitId: comment.commit_id,
+          inReplyToId: comment.in_reply_to_id ?? null,
+          createdAt: comment.created_at,
+          updatedAt: comment.updated_at,
+          htmlUrl: comment.html_url
+        });
+      }
+      
+      hasMore = pageComments.length === perPage;
+      page++;
+      
+      // Safety limit
+      if (page > 10) {
+        console.warn('Reached maximum pages fetching review comments');
+        break;
+      }
+    }
 
-    return comments.map(comment => ({
-      id: comment.id,
-      body: comment.body || '',
-      user: {
-        login: comment.user?.login || 'unknown',
-        type: comment.user?.type || 'User'
-      },
-      createdAt: comment.created_at,
-      updatedAt: comment.updated_at
-    }));
+    return comments;
   }
 
   /**
@@ -667,6 +764,145 @@ export class GitHubAdapter implements VCSAdapter {
         };
       }
       throw error;
+    }
+  }
+
+  // ============================================
+  // PR State Methods
+  // ============================================
+
+  /**
+   * Check if PR is a draft
+   */
+  async isDraft(prId: string | number): Promise<boolean> {
+    const { data: pr } = await this.octokit.pulls.get({
+      owner: this.owner,
+      repo: this.repo,
+      pull_number: Number(prId)
+    });
+    return pr.draft ?? false;
+  }
+
+  /**
+   * Check if PR is merged
+   */
+  async isMerged(prId: string | number): Promise<boolean> {
+    const { data: pr } = await this.octokit.pulls.get({
+      owner: this.owner,
+      repo: this.repo,
+      pull_number: Number(prId)
+    });
+    return pr.merged ?? false;
+  }
+
+  /**
+   * Check if PR is closed
+   */
+  async isClosed(prId: string | number): Promise<boolean> {
+    const { data: pr } = await this.octokit.pulls.get({
+      owner: this.owner,
+      repo: this.repo,
+      pull_number: Number(prId)
+    });
+    return pr.state === 'closed';
+  }
+
+  /**
+   * Check if discussion is locked
+   */
+  async isLocked(prId: string | number): Promise<boolean> {
+    const { data: pr } = await this.octokit.pulls.get({
+      owner: this.owner,
+      repo: this.repo,
+      pull_number: Number(prId)
+    });
+    return pr.locked ?? false;
+  }
+
+  /**
+   * Get file renames in a PR
+   */
+  async getFileRenames(prId: string | number): Promise<Array<{ oldPath: string; newPath: string }>> {
+    const { data: files } = await this.octokit.pulls.listFiles({
+      owner: this.owner,
+      repo: this.repo,
+      pull_number: Number(prId),
+      per_page: 100
+    });
+
+    return files
+      .filter(f => f.status === 'renamed')
+      .map(f => ({
+        oldPath: f.previous_filename || '',
+        newPath: f.filename
+      }));
+  }
+
+  /**
+   * Find existing checkpoint comment
+   */
+  async findCheckpointComment(prId: string | number): Promise<PRComment | null> {
+    const comments = await this.getPRComments(prId);
+    
+    // Find the most recent checkpoint comment
+    const checkpointComments = comments.filter(c => 
+      c.body.includes('AGNUSAI_CHECKPOINT') || c.body.includes('AgnusAI Review Checkpoint')
+    );
+    
+    if (checkpointComments.length === 0) {
+      return null;
+    }
+    
+    // Return the most recent one
+    return checkpointComments.sort((a, b) => 
+      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    )[0];
+  }
+
+  /**
+   * Update an existing review comment
+   */
+  async updateReviewComment(
+    prId: string | number,
+    commentId: string | number,
+    body: string
+  ): Promise<void> {
+    await this.octokit.pulls.updateReviewComment({
+      owner: this.owner,
+      repo: this.repo,
+      comment_id: Number(commentId),
+      body
+    });
+  }
+
+  /**
+   * Delete a review comment
+   */
+  async deleteReviewComment(
+    prId: string | number,
+    commentId: string | number
+  ): Promise<void> {
+    await this.octokit.pulls.deleteReviewComment({
+      owner: this.owner,
+      repo: this.repo,
+      comment_id: Number(commentId)
+    });
+  }
+
+  /**
+   * Get rate limit status
+   */
+  async getRateLimit(): Promise<{ limit: number; remaining: number; resetAt: Date } | null> {
+    try {
+      const { data } = await this.octokit.rateLimit.get();
+      const core = data.resources.core;
+      return {
+        limit: core.limit,
+        remaining: core.remaining,
+        resetAt: new Date(core.reset * 1000)
+      };
+    } catch {
+      return null;
     }
   }
 }

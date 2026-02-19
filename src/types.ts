@@ -235,6 +235,133 @@ export interface PRComment {
 }
 
 /**
+ * Detailed review comment with position information
+ * Used for duplicate detection and line tracking
+ */
+export interface DetailedReviewComment {
+  id: number;
+  body: string;
+  user: {
+    login: string;
+    type: string;
+  };
+  path: string;
+  line: number | null;
+  originalLine?: number | null;
+  position?: number | null;
+  commitId?: string;
+  inReplyToId?: number | null;
+  createdAt: string;
+  updatedAt: string;
+  htmlUrl: string;
+}
+
+/**
+ * Comment metadata stored inline in comments
+ * Used for tracking original code and issue context
+ */
+export interface CommentMetadata {
+  /** SHA of the commit when comment was made */
+  commitSha: string;
+  /** Original code snippet at the line */
+  originalCode?: string;
+  /** Issue identifier for tracking */
+  issueId: string;
+  /** Timestamp when comment was created */
+  timestamp: number;
+}
+
+/**
+ * Comment dismissal status
+ */
+export interface CommentDismissal {
+  /** Whether the comment was dismissed */
+  dismissed: boolean;
+  /** Dismissal reason if any */
+  reason?: 'wontfix' | 'as-designed' | 'false-positive' | 'resolved' | 'other';
+  /** Who dismissed it */
+  dismissedBy?: string;
+}
+
+/**
+ * File rename information for tracking line movement
+ */
+export interface FileRename {
+  oldPath: string;
+  newPath: string;
+}
+
+/**
+ * Rate limit information
+ */
+export interface RateLimitInfo {
+  limit: number;
+  remaining: number;
+  resetAt: Date;
+  provider: string;
+}
+
+/**
+ * Review state for tracking
+ */
+export interface ReviewState {
+  prNumber: number;
+  lastReviewSha: string;
+  lastReviewTime: Date;
+  commentCount: number;
+  pendingComments: ReviewComment[];
+}
+
+/**
+ * Idempotency key for preventing duplicate operations
+ */
+export interface IdempotencyKey {
+  key: string;
+  createdAt: Date;
+  expiresAt: Date;
+  operation: 'create_comment' | 'submit_review' | 'create_checkpoint';
+}
+
+/**
+ * Provider-agnostic PR state
+ */
+export interface PRState {
+  isDraft: boolean;
+  isMerged: boolean;
+  isClosed: boolean;
+  isLocked: boolean;
+  mergeable?: boolean;
+  mergeableState?: string;
+}
+
+/**
+ * Secret detection result
+ */
+export interface SecretDetection {
+  found: boolean;
+  type?: 'api_key' | 'password' | 'token' | 'private_key' | 'connection_string';
+  line?: number;
+  path?: string;
+  // NOTE: Never include the actual secret value!
+}
+
+/**
+ * Configuration for comment filtering
+ */
+export interface CommentFilterConfig {
+  maxComments: number;
+  maxCommentsPerFile: number;
+  maxCommentLength: number;
+  skipDrafts: boolean;
+  skipMerged: boolean;
+  skipClosed: boolean;
+  skipLocked: boolean;
+  timeout: number;
+  retryAttempts: number;
+  retryDelay: number;
+}
+
+/**
  * Options for incremental review
  */
 export interface IncrementalReviewOptions {
