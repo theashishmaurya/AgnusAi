@@ -4,7 +4,7 @@ An AI-powered code review agent that reviews pull requests on **GitHub** and **A
 
 ## Features
 
-- 🤖 **Multiple LLM Backends** — Ollama (local/free), Claude (Anthropic), OpenAI
+- 🤖 **Unified LLM Backend** — Vercel AI SDK with support for Ollama, OpenAI, Azure OpenAI, and any OpenAI-compatible endpoint
 - 🔄 **Multi-platform** — GitHub and Azure DevOps
 - 📍 **Inline Comments** — Rich formatted comments posted on specific lines in the diff
 - 📚 **Skills-based** — Pluggable review skills matched by file patterns
@@ -81,9 +81,20 @@ vcs:
     token: ""              # or set AZURE_DEVOPS_TOKEN env var
 
 llm:
-  provider: ollama         # ollama | claude | openai
+  provider: ollama         # ollama | openai | azure | custom
   model: qwen3.5:cloud
-  baseUrl: "http://localhost:11434"
+  providers:
+    ollama:
+      baseURL: http://localhost:11434/v1
+    openai:
+      baseURL: https://api.openai.com/v1
+      apiKey: ${OPENAI_API_KEY}
+    azure:
+      baseURL: https://your-resource.openai.azure.com/openai/deployments/gpt-4
+      apiKey: ${AZURE_OPENAI_KEY}
+    custom:
+      baseURL: https://your-endpoint.com/v1
+      apiKey: ${CUSTOM_API_KEY}
 
 skills:
   path: ~/.pr-review/skills
@@ -104,15 +115,22 @@ review:
 |----------|-------------|--------------|
 | `GITHUB_TOKEN` | GitHub Personal Access Token | GitHub reviews |
 | `AZURE_DEVOPS_TOKEN` | Azure DevOps PAT | Azure DevOps reviews |
-| `ANTHROPIC_API_KEY` | Anthropic API Key | Claude backend |
-| `OPENAI_API_KEY` | OpenAI API Key | OpenAI backend |
-| `OLLAMA_HOST` | Ollama server URL | Ollama (default: localhost:11434) |
+| `OPENAI_API_KEY` | OpenAI API Key | OpenAI provider |
+| `AZURE_OPENAI_KEY` | Azure OpenAI Key | Azure provider |
+| `CUSTOM_API_KEY` | Custom endpoint key | Custom provider |
 
-## LLM Backends
+See `.env.example` for full configuration options.
 
-All backends share the same prompt builder and response parser. Only the API call differs per provider.
+## LLM Backend
 
-### Ollama (Default — Free, Local)
+AgnusAI uses Vercel AI SDK's `@ai-sdk/openai-compatible` package to support any OpenAI-compatible endpoint:
+
+- **Ollama** — Local, free (no API key needed)
+- **OpenAI** — GPT-4, GPT-4o
+- **Azure OpenAI** — Enterprise deployments
+- **Custom** — Any OpenAI-compatible endpoint (LM Studio, vLLM, etc.)
+
+### Quick Start with Ollama
 
 ```bash
 ollama pull qwen3.5:cloud
