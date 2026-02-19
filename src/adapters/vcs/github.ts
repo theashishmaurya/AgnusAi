@@ -11,7 +11,10 @@ import {
   Ticket,
   Author,
   DiffHunk,
-  FileDiff
+  FileDiff,
+  CommitComparison,
+  PRComment,
+  ReviewCheckpoint
 } from '../../types';
 
 interface GitHubConfig {
@@ -366,6 +369,304 @@ export class GitHubAdapter implements VCSAdapter {
       return '';
     } catch {
       return '';
+    }
+  }
+
+  // ============================================
+  // Incremental Review Methods
+  // ============================================
+
+  /**
+   * Compare two commits and return the diff between them
+   * Uses GitHub's Compare API
+   * 
+   * @param baseSha The base commit SHA (checkpoint SHA)
+   * @param headSha The head commit SHA (current HEAD)
+   * @returns CommitComparison with files changed and stats
+   */
+  async compareCommits(baseSha: string, headSha: string): Promise<CommitComparison> {
+    const { data: comparison } = await this.octokit.repos.compareCommits({
+      owner: this.owner,
+      repo: this.repo,
+      base: baseSha,
+      head: headSha,
+      per_page: 100
+    });
+
+    // Map GitHub files to FileDiff
+    const files: FileDiff[] = (comparison.files || []).map(file => {
+      let status: FileDiff['status'] = 'modified';
+      if (file.status === 'added') status = 'added';
+      else if (file.status === 'removed') status = 'deleted';
+      else if (file.status === 'renamed') status = 'renamed';
+
+      return {
+        path: file.filename,
+        oldPath: file.previous_filename,
+        status,
+        additions: file.additions || 0,
+        deletions: file.deletions || 0,
+        hunks: [] // Hunks would need additional API call to get full diff
+      };
+    });
+
+    // Determine status
+    let status: CommitComparison['status'] = 'identical';
+    if (comparison.ahead_by > 0 && comparison.behind_by > 0) {
+      status = 'diverged';
+    } else if (comparison.ahead_by > 0) {
+      status = 'ahead';
+    } else if (comparison.behind_by > 0) {
+      status = 'behind';
+    }
+
+    return {
+      baseSha,
+      headSha,
+      status,
+      aheadBy: comparison.ahead_by,
+      behindBy: comparison.behind_by,
+      files,
+      additions: files.reduce((sum, f) => sum + f.additions, 0),
+      deletions: files.reduce((sum, f) => sum + f.deletions, 0)
+    };
+  }
+
+  /**
+   * Get all issue comments on a PR (not review comments)
+   * Used to find checkpoint comments
+   * 
+   * @param prId PR number
+   * @returns List of PR comments
+   */
+  async getPRComments(prId: string | number): Promise<PRComment[]> {
+    const { data: comments } = await this.octokit.issues.listComments({
+      owner: this.owner,
+      repo: this.repo,
+      issue_number: Number(prId),
+      per_page: 100
+    });
+
+    return comments.map(comment => ({
+      id: comment.id,
+      body: comment.body || '',
+      user: {
+        login: comment.user?.login || 'unknown',
+        type: comment.user?.type || 'User'
+      },
+      createdAt: comment.created_at,
+      updatedAt: comment.updated_at
+    }));
+  }
+
+  /**
+   * Get all review comments on a PR (inline comments on code)
+   * 
+   * @param prId PR number
+   * @returns List of review comments
+   */
+  async getReviewComments(prId: string | number): Promise<PRComment[]> {
+    const { data: comments } = await this.octokit.pulls.listReviewComments({
+      owner: this.owner,
+      repo: this.repo,
+      pull_number: Number(prId),
+      per_page: 100
+    });
+
+    return comments.map(comment => ({
+      id: comment.id,
+      body: comment.body || '',
+      user: {
+        login: comment.user?.login || 'unknown',
+        type: comment.user?.type || 'User'
+      },
+      createdAt: comment.created_at,
+      updatedAt: comment.updated_at
+    }));
+  }
+
+  /**
+   * Create a checkpoint comment on a PR
+   * 
+   * @param prId PR number
+   * @param checkpoint The checkpoint to store
+   * @returns The created comment ID
+   */
+  async createCheckpointComment(
+    prId: string | number,
+    checkpoint: ReviewCheckpoint
+  ): Promise<number> {
+    const body = this.generateCheckpointBody(checkpoint);
+
+    const { data: comment } = await this.octokit.issues.createComment({
+      owner: this.owner,
+      repo: this.repo,
+      issue_number: Number(prId),
+      body
+    });
+
+    return comment.id;
+  }
+
+  /**
+   * Update an existing checkpoint comment
+   * 
+   * @param commentId The comment ID to update
+   * @param checkpoint The new checkpoint data
+   */
+  async updateCheckpointComment(
+    commentId: number,
+    checkpoint: ReviewCheckpoint
+  ): Promise<void> {
+    const body = this.generateCheckpointBody(checkpoint);
+
+    await this.octokit.issues.updateComment({
+      owner: this.owner,
+      repo: this.repo,
+      comment_id: commentId,
+      body
+    });
+  }
+
+  /**
+   * Delete a checkpoint comment
+   * 
+   * @param commentId The comment ID to delete
+   */
+  async deleteCheckpointComment(commentId: number): Promise<void> {
+    await this.octokit.issues.deleteComment({
+      owner: this.owner,
+      repo: this.repo,
+      comment_id: commentId
+    });
+  }
+
+  /**
+   * Generate the checkpoint comment body
+   */
+  private generateCheckpointBody(checkpoint: ReviewCheckpoint): string {
+    const dateStr = new Date(checkpoint.timestamp * 1000).toISOString();
+    
+    return `<!-- AGNUSAI_CHECKPOINT: ${JSON.stringify({
+      sha: checkpoint.sha,
+      timestamp: checkpoint.timestamp,
+      filesReviewed: checkpoint.filesReviewed,
+      commentCount: checkpoint.commentCount,
+      verdict: checkpoint.verdict
+    })} -->
+
+## 🔍 AgnusAI Review Checkpoint
+
+**Last reviewed commit:** \`${checkpoint.sha.substring(0, 7)}\`
+**Reviewed at:** ${dateStr}
+**Files reviewed:** ${checkpoint.filesReviewed.length}
+**Comments:** ${checkpoint.commentCount}
+**Verdict:** ${checkpoint.verdict === 'approve' ? '✅ Approved' : checkpoint.verdict === 'request_changes' ? '🔄 Changes Requested' : '💬 Commented'}
+
+---
+*This checkpoint enables incremental reviews. New commits will only trigger review of new changes.*`;
+  }
+
+  /**
+   * Get the current HEAD SHA of a PR
+   * 
+   * @param prId PR number  
+   * @returns The HEAD commit SHA
+   */
+  async getHeadSha(prId: string | number): Promise<string> {
+    const { data: pr } = await this.octokit.pulls.get({
+      owner: this.owner,
+      repo: this.repo,
+      pull_number: Number(prId)
+    });
+    return pr.head.sha;
+  }
+
+  /**
+   * Get incremental diff for a PR since a checkpoint
+   * 
+   * @param prId PR number
+   * @param checkpointSha The SHA from the last checkpoint
+   * @returns Incremental diff or null if full review needed
+   */
+  async getIncrementalDiff(
+    prId: string | number,
+    checkpointSha: string
+  ): Promise<{ diff: Diff; isIncremental: true } | { diff: null; isIncremental: false; reason: string }> {
+    const headSha = await this.getHeadSha(prId);
+
+    // If no new commits, no diff needed
+    if (headSha === checkpointSha) {
+      return {
+        diff: { files: [], additions: 0, deletions: 0, changedFiles: 0 },
+        isIncremental: true
+      };
+    }
+
+    try {
+      const comparison = await this.compareCommits(checkpointSha, headSha);
+      
+      // If diverged or behind, we need a full review
+      if (comparison.status === 'diverged') {
+        return {
+          diff: null,
+          isIncremental: false,
+          reason: 'Commits have diverged (possible force push)'
+        };
+      }
+
+      if (comparison.status === 'behind') {
+        return {
+          diff: null,
+          isIncremental: false,
+          reason: 'Checkpoint SHA is ahead of current HEAD (unexpected)'
+        };
+      }
+
+      // If identical, no changes
+      if (comparison.status === 'identical') {
+        return {
+          diff: { files: [], additions: 0, deletions: 0, changedFiles: 0 },
+          isIncremental: true
+        };
+      }
+
+      // Ahead - we have incremental changes
+      // Get full diff content for the changed files
+      const diffResponse = await this.octokit.request(
+        'GET /repos/{owner}/{repo}/compare/{basehead}',
+        {
+          owner: this.owner,
+          repo: this.repo,
+          basehead: `${checkpointSha}...${headSha}`,
+          headers: { Accept: 'application/vnd.github.v3.diff' }
+        }
+      );
+
+      const diffText = String(diffResponse.data);
+      
+      // Parse the diff
+      const files = this.parseDiff(diffText, comparison.files);
+
+      return {
+        diff: {
+          files,
+          additions: comparison.additions,
+          deletions: comparison.deletions,
+          changedFiles: comparison.files.length
+        },
+        isIncremental: true
+      };
+    } catch (error: any) {
+      // If the checkpoint SHA doesn't exist (e.g., force push), do full review
+      if (error.status === 404 || error.message?.includes('not found')) {
+        return {
+          diff: null,
+          isIncremental: false,
+          reason: 'Checkpoint SHA not found in repository'
+        };
+      }
+      throw error;
     }
   }
 }

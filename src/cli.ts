@@ -35,6 +35,8 @@ program
   .option('--dry-run', 'Show review without posting', false)
   .option('--output <format>', 'Output format (json|markdown)', 'markdown')
   .option('--config <path>', 'Path to config file', DEFAULT_CONFIG_PATH)
+  .option('--incremental', 'Only review changes since last checkpoint (GitHub only)', false)
+  .option('--force-full', 'Force full review, ignoring checkpoint', false)
   .action(async (options) => {
     try {
       // Load config
@@ -96,8 +98,18 @@ program
 
       console.log(`\n🔍 Reviewing PR #${options.pr} in ${owner}/${repo}...\n`);
 
-      // Run review
-      const result = await agent.review(Number(options.pr));
+      // Run review - use incremental mode if requested
+      let result;
+      if (options.incremental && options.vcs === 'github') {
+        result = await agent.incrementalReview(Number(options.pr), {
+          forceFull: options.forceFull
+        });
+      } else {
+        if (options.incremental) {
+          console.log('⚠️  Incremental review only supported for GitHub. Running full review.');
+        }
+        result = await agent.review(Number(options.pr));
+      }
 
       // Output result
       if (options.output === 'json') {

@@ -15,14 +15,47 @@ export { LLMBackend } from './llm/base';
 
 export { SkillLoader } from './skills/loader';
 
+// Export checkpoint functions
+export {
+  parseCheckpoint,
+  serializeCheckpoint,
+  createCheckpoint,
+  findCheckpointComment,
+  generateCheckpointComment,
+  isCheckpointStale,
+  validateCheckpointSha,
+  CHECKPOINT_MARKER,
+  CHECKPOINT_SUFFIX,
+  CHECKPOINT_USER_AGENT
+} from './review/checkpoint';
+
 export * from './types';
 
 import { VCSAdapter } from './adapters/vcs/base';
 import { TicketAdapter } from './adapters/ticket/base';
 import { LLMBackend } from './llm/base';
 import { SkillLoader } from './skills/loader';
-import { ReviewContext, ReviewResult, ReviewComment, Diff, Config } from './types';
+import { ReviewContext, ReviewResult, ReviewComment, Diff, Config, ReviewCheckpoint, IncrementalReviewOptions } from './types';
+import { GitHubAdapter } from './adapters/vcs/github';
+import {
+  findCheckpointComment,
+  createCheckpoint,
+  generateCheckpointComment
+} from './review/checkpoint';
 
+/**
+ * Result of an incremental review check
+ */
+export interface IncrementalCheckResult {
+  /** Whether this is an incremental review */
+  isIncremental: boolean;
+  /** Reason if not incremental */
+  reason?: string;
+  /** The checkpoint if found */
+  checkpoint?: ReviewCheckpoint;
+  /** The comment ID if checkpoint found */
+  checkpointCommentId?: number;
+}
 
 export class PRReviewAgent {
   private vcs: VCSAdapter;
@@ -51,6 +84,153 @@ export class PRReviewAgent {
 
   addTicketAdapter(adapter: TicketAdapter): void {
     this.tickets.push(adapter);
+  }
+
+  /**
+   * Check if an incremental review is possible
+   */
+  async checkIncremental(prId: string | number): Promise<IncrementalCheckResult> {
+    // Only GitHub adapter supports incremental reviews
+    if (!(this.vcs instanceof GitHubAdapter)) {
+      return { isIncremental: false, reason: 'Incremental reviews only supported for GitHub' };
+    }
+
+    const github = this.vcs as GitHubAdapter;
+
+    // Get all issue comments on the PR
+    const comments = await github.getPRComments(prId);
+
+    // Find checkpoint comment
+    const found = findCheckpointComment(comments);
+
+    if (!found) {
+      return { isIncremental: false, reason: 'No checkpoint comment found' };
+    }
+
+    return {
+      isIncremental: true,
+      checkpoint: found.checkpoint,
+      checkpointCommentId: found.comment.id
+    };
+  }
+
+  /**
+   * Perform an incremental review (only review new commits)
+   */
+  async incrementalReview(
+    prId: string | number,
+    options: IncrementalReviewOptions = {}
+  ): Promise<ReviewResult> {
+    // Check for checkpoint
+    const checkResult = await this.checkIncremental(prId);
+
+    if (options.forceFull || !checkResult.isIncremental || !checkResult.checkpoint) {
+      console.log(`📋 Full review mode: ${checkResult.reason || 'forced'}`);
+      return this.review(prId);
+    }
+
+    const github = this.vcs as GitHubAdapter;
+    const checkpoint = checkResult.checkpoint;
+
+    console.log(`🔄 Incremental review from checkpoint: ${checkpoint.sha.substring(0, 7)}`);
+
+    // Get incremental diff
+    const incrementalResult = await github.getIncrementalDiff(prId, checkpoint.sha);
+
+    if (!incrementalResult.isIncremental) {
+      console.log(`⚠️  Cannot do incremental review: ${incrementalResult.reason}`);
+      return this.review(prId);
+    }
+
+    // If no changes, return empty result
+    if (incrementalResult.diff.files.length === 0) {
+      return {
+        summary: 'No new changes since last review checkpoint.',
+        comments: [],
+        suggestions: [],
+        verdict: 'comment'
+      };
+    }
+
+    // Fetch PR data
+    const pr = await this.vcs.getPR(prId);
+    const files = await this.vcs.getFiles(prId);
+
+    // Filter files to only those changed since checkpoint
+    const changedFilePaths = new Set(incrementalResult.diff.files.map(f => f.path));
+    const relevantFiles = files.filter(f => changedFilePaths.has(f.path));
+
+    // Get linked tickets
+    const linkedTicketIds = await this.vcs.getLinkedTickets(prId);
+    const tickets = [];
+    for (const adapter of this.tickets) {
+      for (const id of linkedTicketIds) {
+        try {
+          const ticket = await adapter.getTicket(id.key);
+          tickets.push(ticket);
+        } catch {
+          // Ticket not found
+        }
+      }
+    }
+
+    // Load applicable skills
+    const applicableSkills = await this.skills.matchSkills(
+      relevantFiles.map(f => f.path)
+    );
+
+    // Build context with incremental diff
+    const context: ReviewContext = {
+      pr,
+      diff: incrementalResult.diff,
+      files: relevantFiles,
+      tickets,
+      skills: applicableSkills,
+      config: this.config.review
+    };
+
+    // Run review
+    const result = await this.llm.generateReview(context);
+
+    // Add checkpoint marker to summary
+    result.summary = `[Incremental Review: ${incrementalResult.diff.files.length} new files]\n\n${result.summary}`;
+
+    // Cache diff
+    this.lastDiff = incrementalResult.diff;
+
+    // Update checkpoint if not skipped
+    if (!options.skipCheckpoint && checkResult.checkpointCommentId) {
+      await this.updateCheckpoint(prId, result, checkResult.checkpointCommentId);
+    }
+
+    return result;
+  }
+
+  /**
+   * Create or update checkpoint after review
+   */
+  private async updateCheckpoint(
+    prId: string | number,
+    result: ReviewResult,
+    existingCommentId?: number
+  ): Promise<void> {
+    const github = this.vcs as GitHubAdapter;
+    const headSha = await github.getHeadSha(prId);
+
+    const checkpoint = createCheckpoint(
+      headSha,
+      result.comments.map(c => c.path),
+      result.comments.length,
+      result.verdict
+    );
+
+    if (existingCommentId) {
+      console.log('📝 Updating checkpoint comment...');
+      await github.updateCheckpointComment(existingCommentId, checkpoint);
+    } else {
+      console.log('📝 Creating checkpoint comment...');
+      await github.createCheckpointComment(prId, checkpoint);
+    }
   }
 
   async review(prId: string | number): Promise<ReviewResult> {
@@ -125,5 +305,28 @@ export class PRReviewAgent {
       comments: validComments,
       verdict
     });
+
+    // Create checkpoint after successful review
+    if (this.vcs instanceof GitHubAdapter) {
+      await this.createCheckpointAfterReview(prId, result);
+    }
+  }
+
+  /**
+   * Create checkpoint comment after review
+   */
+  private async createCheckpointAfterReview(prId: string | number, result: ReviewResult): Promise<void> {
+    const github = this.vcs as GitHubAdapter;
+    const headSha = await github.getHeadSha(prId);
+
+    const checkpoint = createCheckpoint(
+      headSha,
+      result.comments.map(c => c.path),
+      result.comments.length,
+      result.verdict
+    );
+
+    console.log('📝 Creating checkpoint comment...');
+    await github.createCheckpointComment(prId, checkpoint);
   }
 }
