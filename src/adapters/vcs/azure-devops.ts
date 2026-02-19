@@ -11,7 +11,10 @@ import {
   Ticket,
   Author,
   FileDiff,
-  DiffHunk
+  DiffHunk,
+  DetailedReviewComment,
+  PRComment,
+  ReviewCheckpoint
 } from '../../types';
 
 interface AzureDevOpsConfig {
@@ -514,6 +517,343 @@ export class AzureDevOpsAdapter implements VCSAdapter {
     }
 
     return await response.text();
+  }
+
+  // ============================================
+  // Extended Comment Methods (for deduplication)
+  // ============================================
+
+  /**
+   * Get all review comments (threads in Azure DevOps)
+   * Handles pagination to fetch ALL comments
+   */
+  async getReviewComments(prId: string | number): Promise<DetailedReviewComment[]> {
+    const comments: DetailedReviewComment[] = [];
+    let skip = 0;
+    const top = 100;
+    let hasMore = true;
+
+    while (hasMore) {
+      const url = this.getGitApiUrl(
+        `/repositories/${this.repository}/pullrequests/${prId}/threads?$top=${top}&$skip=${skip}&api-version=7.0`
+      );
+
+      const response = await fetch(url, { headers: this.getAuthHeaders() });
+      if (!response.ok) {
+        throw new Error(`Failed to fetch threads: ${response.statusText}`);
+      }
+
+      const data = await response.json() as {
+        value: Array<{
+          id: number;
+          threadContext?: {
+            filePath?: string;
+            rightFileStart?: { line: number; offset: number };
+          };
+          comments: Array<{
+            id: number;
+            content: string;
+            author: { displayName: string; uniqueName: string };
+            publishedDate: string;
+            lastUpdatedDate: string;
+            parentCommentId?: number;
+          }>;
+          status: string;
+        }>;
+      };
+
+      for (const thread of data.value || []) {
+        // Each thread can have multiple comments
+        for (const comment of thread.comments || []) {
+          // Normalize file path (remove leading /)
+          const path = thread.threadContext?.filePath?.replace(/^\//, '') || '';
+          const line = thread.threadContext?.rightFileStart?.line || null;
+          
+          comments.push({
+            id: Number(`${thread.id}-${comment.id}`), // Composite ID
+            body: comment.content || '',
+            user: {
+              login: comment.author.uniqueName,
+              type: 'User'
+            },
+            path,
+            line,
+            inReplyToId: comment.parentCommentId ? Number(`${thread.id}-${comment.parentCommentId}`) : null,
+            createdAt: comment.publishedDate,
+            updatedAt: comment.lastUpdatedDate,
+            htmlUrl: `${this.baseUrl}/${this.organization}/${this.project}/_git/${this.repository}/pullrequest/${prId}?discussionId=${thread.id}`
+          });
+        }
+      }
+
+      // Check if there are more results
+      hasMore = (data.value?.length || 0) === top;
+      skip += top;
+
+      // Safety limit
+      if (skip > 1000) {
+        console.warn('Reached maximum threads fetching comments');
+        break;
+      }
+    }
+
+    return comments;
+  }
+
+  /**
+   * Get PR-level comments
+   */
+  async getPRComments(prId: string | number): Promise<PRComment[]> {
+    // In Azure DevOps, these are threads without file context
+    const threads = await this.getReviewComments(prId);
+    return threads
+      .filter(t => !t.path) // No file context = PR-level comment
+      .map(t => ({
+        id: t.id,
+        body: t.body,
+        user: t.user,
+        createdAt: t.createdAt,
+        updatedAt: t.updatedAt
+      }));
+  }
+
+  /**
+   * Update a review comment
+   */
+  async updateReviewComment(
+    prId: string | number,
+    commentId: string | number,
+    body: string
+  ): Promise<void> {
+    // Parse composite ID (threadId-commentId)
+    const [threadIdStr, ,] = String(commentId).split('-');
+    const threadId = parseInt(threadIdStr, 10);
+
+    const url = this.getGitApiUrl(
+      `/repositories/${this.repository}/pullrequests/${prId}/threads/${threadId}/comments?api-version=7.0`
+    );
+
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify({
+        content: body
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to update comment: ${response.statusText}`);
+    }
+  }
+
+  /**
+   * Delete a review comment
+   */
+  async deleteReviewComment(
+    prId: string | number,
+    commentId: string | number
+  ): Promise<void> {
+    const [threadIdStr, commentIdStr] = String(commentId).split('-');
+    const threadId = parseInt(threadIdStr, 10);
+    const cId = parseInt(commentIdStr, 10);
+
+    const url = this.getGitApiUrl(
+      `/repositories/${this.repository}/pullrequests/${prId}/threads/${threadId}/comments/${cId}?api-version=7.0`
+    );
+
+    const response = await fetch(url, {
+      method: 'DELETE',
+      headers: this.getAuthHeaders()
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to delete comment: ${response.statusText}`);
+    }
+  }
+
+  // ============================================
+  // Checkpoint Methods
+  // ============================================
+
+  /**
+   * Find existing checkpoint comment
+   */
+  async findCheckpointComment(prId: string | number): Promise<PRComment | null> {
+    const comments = await this.getPRComments(prId);
+    
+    const checkpointComments = comments.filter(c => 
+      c.body.includes('AGNUSAI_CHECKPOINT') || c.body.includes('AgnusAI Review Checkpoint')
+    );
+    
+    if (checkpointComments.length === 0) {
+      return null;
+    }
+    
+    return checkpointComments.sort((a, b) => 
+      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    )[0];
+  }
+
+  /**
+   * Create a checkpoint comment
+   */
+  async createCheckpointComment(
+    prId: string | number,
+    checkpoint: ReviewCheckpoint
+  ): Promise<string> {
+    const body = this.generateCheckpointBody(checkpoint);
+    
+    const url = this.getGitApiUrl(
+      `/repositories/${this.repository}/pullrequests/${prId}/threads?api-version=7.0`
+    );
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify({
+        comments: [{
+          parentCommentId: 0,
+          content: body,
+          commentType: 'text'
+        }],
+        status: 'active'
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to create checkpoint: ${response.statusText}`);
+    }
+
+    const data = await response.json() as { id: number };
+    return String(data.id);
+  }
+
+  /**
+   * Update an existing checkpoint comment
+   */
+  async updateCheckpointComment(
+    commentId: string | number,
+    checkpoint: ReviewCheckpoint
+  ): Promise<void> {
+    const body = this.generateCheckpointBody(checkpoint);
+    const threadId = String(commentId);
+
+    const url = this.getGitApiUrl(
+      `/repositories/${this.repository}/pullrequests/*/threads/${threadId}/comments?api-version=7.0`
+    );
+
+    const response = await fetch(url, {
+      method: 'PATCH',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify({
+        content: body
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to update checkpoint: ${response.statusText}`);
+    }
+  }
+
+  /**
+   * Generate checkpoint body
+   */
+  private generateCheckpointBody(checkpoint: ReviewCheckpoint): string {
+    const dateStr = new Date(checkpoint.timestamp * 1000).toISOString();
+    
+    return `<!-- AGNUSAI_CHECKPOINT: ${JSON.stringify({
+      sha: checkpoint.sha,
+      timestamp: checkpoint.timestamp,
+      filesReviewed: checkpoint.filesReviewed,
+      commentCount: checkpoint.commentCount,
+      verdict: checkpoint.verdict
+    })} -->
+
+## 🔍 AgnusAI Review Checkpoint
+
+**Last reviewed commit:** \`${checkpoint.sha.substring(0, 7)}\`
+**Reviewed at:** ${dateStr}
+**Files reviewed:** ${checkpoint.filesReviewed.length}
+**Comments:** ${checkpoint.commentCount}
+**Verdict:** ${checkpoint.verdict === 'approve' ? '✅ Approved' : checkpoint.verdict === 'request_changes' ? '🔄 Changes Requested' : '💬 Commented'}
+
+---
+*This checkpoint enables incremental reviews. New commits will only trigger review of new changes.*`;
+  }
+
+  // ============================================
+  // PR State Methods
+  // ============================================
+
+  /**
+   * Check if PR is a draft
+   */
+  async isDraft(prId: string | number): Promise<boolean> {
+    const pr = await this.getPR(prId);
+    return (pr as any).isDraft ?? false;
+  }
+
+  /**
+   * Check if PR is merged
+   */
+  async isMerged(prId: string | number): Promise<boolean> {
+    const url = this.getGitApiUrl(
+      `/repositories/${this.repository}/pullrequests/${prId}?api-version=7.0`
+    );
+
+    const response = await fetch(url, { headers: this.getAuthHeaders() });
+    const data = await response.json() as { status: string };
+    
+    return data.status === 'completed';
+  }
+
+  /**
+   * Check if PR is closed
+   */
+  async isClosed(prId: string | number): Promise<boolean> {
+    const url = this.getGitApiUrl(
+      `/repositories/${this.repository}/pullrequests/${prId}?api-version=7.0`
+    );
+
+    const response = await fetch(url, { headers: this.getAuthHeaders() });
+    const data = await response.json() as { status: string };
+    
+    return data.status === 'abandoned';
+  }
+
+  /**
+   * Check if discussion is locked (not supported in Azure DevOps)
+   */
+  async isLocked(prId: string | number): Promise<boolean> {
+    // Azure DevOps doesn't have a direct equivalent to GitHub's "locked" state
+    return false;
+  }
+
+  /**
+   * Get file renames in a PR
+   */
+  async getFileRenames(prId: string | number): Promise<Array<{ oldPath: string; newPath: string }>> {
+    const diff = await this.getDiff(prId);
+    
+    return diff.files
+      .filter(f => f.status === 'renamed' && f.oldPath)
+      .map(f => ({
+        oldPath: f.oldPath!,
+        newPath: f.path
+      }));
+  }
+
+  // ============================================
+  // Rate Limiting
+  // ============================================
+
+  /**
+   * Get rate limit status (Azure DevOps doesn't expose this directly)
+   */
+  async getRateLimit(): Promise<{ limit: number; remaining: number; resetAt: Date } | null> {
+    // Azure DevOps doesn't have a public rate limit API
+    // Return null to indicate not applicable
+    return null;
   }
 }
 
