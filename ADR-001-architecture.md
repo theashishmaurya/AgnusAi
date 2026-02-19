@@ -10,7 +10,7 @@
 We built an AI-powered PR review agent that:
 - Reviews pull requests on **GitHub** and **Azure DevOps**
 - Posts **rich inline comments** on specific diff lines with severity, steps of reproduction, and AI fix prompts
-- Supports **multiple LLM backends**: Ollama (local/free), Claude (Anthropic), OpenAI
+- Uses **Vercel AI SDK** with unified backend supporting Ollama, OpenAI, Azure OpenAI, and any OpenAI-compatible endpoint
 - Runs via CLI or in CI/CD pipelines — no continuously running service
 
 ### Constraints
@@ -61,12 +61,13 @@ We built an AI-powered PR review agent that:
 │    Comment()     │  │  └────────────────┘  │
 │  - submitReview()│  │                      │
 │                  │  │  ┌──────┐ ┌───────┐  │
-│  Azure specifics:│  │  │Ollama│ │Claude │  │
-│  - LCS diff from │  │  │      │ │       │  │
-│    file content  │  │  └──────┘ └───────┘  │
-│  - Path leading  │  │  ┌──────┐            │
-│    slash norm.   │  │  │OpenAI│            │
-└──────────────────┘  │  └──────┘            │
+│  Azure specifics:│  │  ┌────────────────────┐
+│  - LCS diff from │  │  │ Unified Backend    │
+│    file content  │  │  │ (Vercel AI SDK)    │
+│  - Path leading  │  │  │ - Ollama           │
+│    slash norm.   │  │  │ - OpenAI           │
+└──────────────────┘  │  │ - Azure OpenAI     │
+                      │  │ - Custom endpoint  │
                       └─────────────────────┘
                                │
                                ▼
@@ -192,7 +193,7 @@ PR opened / updated
    - Optional: enrich with file contents
         │
         ▼
-3. Generate Review                   Ollama / Claude / OpenAI
+3. Generate Review                   Unified LLM Backend (Vercel AI SDK)
    - buildReviewPrompt(context)      → prompt.ts (shared)
    - provider.generate(prompt)       → API call
    - parseReviewResponse(response)   → parser.ts (shared)
@@ -214,13 +215,13 @@ PR opened / updated
 
 ## Key Design Decisions
 
-### Decision 1: Shared `prompt.ts` and `parser.ts`
+### Decision 1: Unified Backend with Vercel AI SDK
 
-**Problem:** All three LLM backends (Ollama, Claude, OpenAI) duplicated `buildReviewPrompt`, `buildDiffSummary`, and `parseReviewResponse` — ~400 lines of identical code.
+**Problem:** Initially had three separate LLM backends (Ollama, Claude, OpenAI) duplicating `buildReviewPrompt`, `buildDiffSummary`, and `parseReviewResponse` — ~400 lines of duplicated code. Adding new providers meant implementing from scratch.
 
-**Decision:** Extract into shared modules. `BaseLLMBackend` calls them in `generateReview()`. Each provider only implements `generate()` (~15 lines).
+**Decision:** Refactored to use Vercel AI SDK's `@ai-sdk/openai-compatible` package. Single `UnifiedLLMBackend` supports any OpenAI-compatible endpoint via `baseURL` + `apiKey` configuration.
 
-**Result:** Adding a new LLM provider requires only implementing the API call. Prompt changes apply to all providers simultaneously.
+**Result:** Adding a new provider requires only a config entry. Works with Ollama (local), OpenAI, Azure OpenAI, LM Studio, vLLM, and any custom endpoint.
 
 ### Decision 2: Azure DevOps LCS Diff
 
@@ -312,13 +313,13 @@ Validate the correctness of the flagged issue. If correct, how can I resolve thi
 - [x] Inline comments on specific diff lines
 
 ### ✅ Phase 2 — Multi-provider + Azure
-- [x] Claude backend
-- [x] OpenAI backend
+- [x] **Unified LLM Backend (Vercel AI SDK)** — replaces separate Ollama/Claude/OpenAI implementations
 - [x] Azure DevOps adapter with LCS-based real diff
 - [x] Decoupled `prompt.ts` / `parser.ts` shared across all providers
 - [x] Rich inline comment format (Severity, Steps of Reproduction, AI Fix Prompt)
 - [x] Path normalisation and validation before posting
 - [x] Duplicate comment fix (single post path)
+- [x] Fallback to COMMENT when REQUEST_CHANGES fails on own PR
 
 ### 🔲 Phase 3 — Ticket Integration
 - [ ] Jira adapter
@@ -345,8 +346,8 @@ Validate the correctness of the flagged issue. If correct, how can I resolve thi
 | Azure DevOps API | `node-fetch` (REST) |
 | HTTP Client | `node-fetch` |
 | Config | `js-yaml` |
-| LLM — Local | Ollama REST API |
-| LLM — Cloud | Anthropic Messages API, OpenAI Chat Completions API |
+| LLM — Local | Ollama via Vercel AI SDK |
+| LLM — Cloud | OpenAI, Azure OpenAI via Vercel AI SDK |
 | Diff Algorithm | Myers LCS (custom implementation) |
 
 ## Consequences
