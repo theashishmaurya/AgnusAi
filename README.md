@@ -1,59 +1,101 @@
-# PR Review Agent
+# AgnusAI — AI-Powered PR Review Agent
 
-AI-powered code review agent that runs locally via Ollama, with optional Claude/OpenAI backends. Reviews pull requests on GitHub and Azure DevOps with skills-based review behavior.
+An AI-powered code review agent that reviews pull requests on **GitHub** and **Azure DevOps**, posts rich inline comments with severity levels, reproduction steps, and AI fix prompts — all powered by your choice of LLM backend.
 
 ## Features
 
-- 🤖 **Multiple LLM Backends** - Ollama (free), Claude (best quality), OpenAI
-- 🔄 **Multi-platform** - GitHub and Azure DevOps support
-- 📍 **Inline Comments** - Reviews appear on specific lines in the PR diff
-- 📚 **Skills-based** - Review behavior driven by pluggable skills
-- 🚀 **Pipeline-triggered** - Runs in CI/CD, no continuously running service
-- 🔗 **Ticket-aware** - Links PRs to Jira/Linear tickets (Phase 3)
+- 🤖 **Multiple LLM Backends** — Ollama (local/free), Claude (Anthropic), OpenAI
+- 🔄 **Multi-platform** — GitHub and Azure DevOps
+- 📍 **Inline Comments** — Rich formatted comments posted on specific lines in the diff
+- 📚 **Skills-based** — Pluggable review skills matched by file patterns
+- 🚀 **Pipeline-triggered** — Runs in CI/CD, no continuously running service
+- 🔌 **Decoupled Architecture** — Prompt building and response parsing are shared across all providers
+
+## Comment Format
+
+Every inline comment follows a rich structured format:
+
+```
+**Suggestion:** [description of the issue] [tag]
+
+<details>Severity Level: Major ⚠️</details>
+
+```suggestion
+// corrected code
+```
+
+**Steps of Reproduction:**
+<details>Steps to reproduce...</details>
+
+<details>Prompt for AI Agent 🤖</details>
+```
+
+Each comment includes collapsible **Severity**, **Steps of Reproduction**, and a ready-to-paste **AI Agent prompt** to fix the issue.
 
 ## Quick Start
 
 ```bash
-# Clone the repo
-git clone https://github.com/theashishmaurya/pr-review-agent.git
-cd pr-review-agent
-
-# Install dependencies
+git clone https://github.com/ivoyant-eng/AgnusAi.git
+cd AgnusAi
 npm install
-
-# Build
 npm run build
 
-# Review a PR (dry run)
-GITHUB_TOKEN=$(gh auth token) node dist/cli.js review --pr 123 --repo owner/repo --dry-run
+# Review a GitHub PR (dry run)
+GITHUB_TOKEN=$(gh auth token) node dist/cli.js review \
+  --pr 123 --repo owner/repo --dry-run
+
+# Review an Azure DevOps PR
+AZURE_DEVOPS_TOKEN=xxx node dist/cli.js review \
+  --pr 456 --repo ivoyant/my-repo --vcs azure
 ```
 
 ## Installation
 
-### From Source
-
 ```bash
-git clone https://github.com/theashishmaurya/pr-review-agent.git
-cd pr-review-agent
+git clone https://github.com/ivoyant-eng/AgnusAi.git
+cd AgnusAi
 npm install
 npm run build
 ```
 
-### Global Install (coming soon)
-
-```bash
-npm install -g pr-review-agent
-```
-
 ## Configuration
 
-### Quick Config
+### Config File
 
 Create `~/.pr-review/config.yaml`:
 
 ```bash
 mkdir -p ~/.pr-review
 cp config.example.yaml ~/.pr-review/config.yaml
+```
+
+```yaml
+# ~/.pr-review/config.yaml
+
+vcs:
+  github:
+    token: ""              # or set GITHUB_TOKEN env var
+  azure:
+    organization: "my-org"
+    project: "my-project"
+    token: ""              # or set AZURE_DEVOPS_TOKEN env var
+
+llm:
+  provider: ollama         # ollama | claude | openai
+  model: qwen3.5:cloud
+  baseUrl: "http://localhost:11434"
+
+skills:
+  path: ~/.pr-review/skills
+  default: default
+
+review:
+  maxDiffSize: 50000
+  ignorePaths:
+    - node_modules
+    - dist
+    - build
+    - "*.lock"
 ```
 
 ### Environment Variables
@@ -66,189 +108,102 @@ cp config.example.yaml ~/.pr-review/config.yaml
 | `OPENAI_API_KEY` | OpenAI API Key | OpenAI backend |
 | `OLLAMA_HOST` | Ollama server URL | Ollama (default: localhost:11434) |
 
-### Config File
-
-```yaml
-# ~/.pr-review/config.yaml
-
-# VCS Configuration
-vcs:
-  github:
-    token: ""  # Or set GITHUB_TOKEN env var
-  azure:
-    organization: "my-org"
-    project: "my-project"
-    token: ""  # Or set AZURE_DEVOPS_TOKEN env var
-
-# LLM Configuration
-llm:
-  # Provider: ollama, claude, or openai
-  provider: ollama
-  
-  # Model (provider-specific)
-  # Ollama: qwen3.5:cloud, codellama:70b, deepseek-coder:33b
-  # Claude: claude-sonnet-4-20250514, claude-opus-4-20250514
-  # OpenAI: gpt-4o, gpt-4-turbo, gpt-3.5-turbo
-  model: qwen3.5:cloud
-  
-  # Base URL (optional)
-  baseUrl: "http://localhost:11434"
-
-# Skills Configuration
-skills:
-  path: ~/.pr-review/skills
-  default: default
-
-# Review Settings
-review:
-  maxDiffSize: 50000
-  ignorePaths:
-    - node_modules
-    - dist
-    - build
-    - "*.lock"
-```
-
 ## LLM Backends
 
-### Ollama (Default, Free)
+All backends share the same prompt builder and response parser. Only the API call differs per provider.
+
+### Ollama (Default — Free, Local)
 
 ```bash
-# Install Ollama
-curl -fsSL https://ollama.ai/install.sh | sh
-
-# Pull a model
 ollama pull qwen3.5:cloud
 
-# Run review
-GITHUB_TOKEN=$(gh auth token) node dist/cli.js review --pr 123 --repo owner/repo
+node dist/cli.js review --pr 123 --repo owner/repo --provider ollama --model qwen3.5:cloud
 ```
 
 **Recommended Models:**
+
 | Model | Size | Best For |
 |-------|------|----------|
-| `qwen3.5:cloud` | 0.5GB | Fast, general reviews |
+| `qwen3.5:cloud` | ~0.5GB | Fast, general reviews |
+| `qwen3.5:397b-cloud` | Cloud | High quality reviews |
 | `codellama:70b` | 38GB | Complex code analysis |
 | `deepseek-coder:33b` | 19GB | Code-specific reviews |
 
 ### Claude (Best Quality)
 
 ```bash
-# Set API key
 export ANTHROPIC_API_KEY=sk-ant-...
 
-# Run with Claude
 node dist/cli.js review --pr 123 --repo owner/repo --provider claude
 ```
 
-**Available Models:**
-- `claude-sonnet-4-20250514` - Fast, high quality (default)
-- `claude-opus-4-20250514` - Best quality, slower
+**Models:** `claude-sonnet-4-20250514` (default), `claude-opus-4-20250514`
 
 ### OpenAI
 
 ```bash
-# Set API key
 export OPENAI_API_KEY=sk-...
 
-# Run with OpenAI
 node dist/cli.js review --pr 123 --repo owner/repo --provider openai
 ```
 
-**Available Models:**
-- `gpt-4o` - Latest, best (default)
-- `gpt-4-turbo` - Fast GPT-4
-- `gpt-3.5-turbo` - Fast, cheaper
+**Models:** `gpt-4o` (default), `gpt-4-turbo`, `gpt-3.5-turbo`
 
 ## CLI Commands
 
 ```bash
-# Review a PR
-pr-review review --pr 123 --repo owner/repo
+# Review a GitHub PR
+node dist/cli.js review --pr 123 --repo owner/repo
 
-# Review with specific VCS
-pr-review review --pr 456 --repo my-repo --vcs azure --azure-org my-org --azure-project my-project
+# Review an Azure DevOps PR
+node dist/cli.js review \
+  --pr 456 \
+  --repo ivoyant/my-repo \
+  --vcs azure
 
-# Use specific LLM provider
-pr-review review --pr 123 --repo owner/repo --provider claude
+# Use a specific provider and model
+node dist/cli.js review --pr 123 --repo owner/repo \
+  --provider claude --model claude-sonnet-4-20250514
 
-# Use specific model
-pr-review review --pr 123 --repo owner/repo --provider openai --model gpt-4-turbo
-
-# Use specific skill
-pr-review review --pr 123 --repo owner/repo --skill security
-
-# Dry run (show review without posting)
-pr-review review --pr 123 --repo owner/repo --dry-run
+# Dry run — show review without posting comments
+node dist/cli.js review --pr 123 --repo owner/repo --dry-run
 
 # Output as JSON
-pr-review review --pr 123 --repo owner/repo --output json
+node dist/cli.js review --pr 123 --repo owner/repo --output json
+
+# Use a specific skill
+node dist/cli.js review --pr 123 --repo owner/repo --skill security
 
 # List available skills
-pr-review skills --path ./skills
+node dist/cli.js skills
 
 # Show current config
-pr-review config
+node dist/cli.js config
+```
+
+## VCS Support
+
+### GitHub
+
+```bash
+GITHUB_TOKEN=$(gh auth token) node dist/cli.js review \
+  --pr 123 --repo owner/repo
+```
+
+### Azure DevOps
+
+Azure org and project are read from `~/.pr-review/config.yaml`. The `--repo` flag takes the form `<any-prefix>/<repository-name>` — only the repository name (after `/`) is used.
+
+```bash
+AZURE_DEVOPS_TOKEN=xxx node dist/cli.js review \
+  --pr 10295 \
+  --repo ivoyant/orchestration-studio \
+  --vcs azure
 ```
 
 ## Skills
 
-Skills define review behavior. They're just markdown files with front matter.
-
-### Skill Location
-
-```
-~/.pr-review/skills/
-├── default/
-│   └── SKILL.md          # Default review behavior
-├── security/
-│   └── SKILL.md          # Security-focused reviews
-├── frontend/
-│   └── SKILL.md          # React/TypeScript patterns
-└── backend/
-    └── SKILL.md          # API/Database patterns
-```
-
-### Creating a Skill
-
-```bash
-mkdir -p ~/.pr-review/skills/my-skill
-cat > ~/.pr-review/skills/my-skill/SKILL.md << 'EOF'
----
-name: My Custom Review
-description: Custom review rules
-trigger:
-  - "**/*.ts"
-  - "src/**/*.js"
-priority: high
----
-
-# My Custom Review Rules
-
-## What to Check
-- No `any` types
-- All functions have JSDoc comments
-- Max 50 lines per function
-EOF
-```
-
-### Skill Structure
-
-```yaml
----
-name: Skill Name           # Display name
-description: What it does  # Shown in CLI
-trigger:                   # Glob patterns to match files
-  - "**/*.ts"
-  - "src/api/**"
-priority: high | medium | low  # Higher = injected first into prompt
----
-
-# Review Instructions
-
-Your custom review logic here...
-This content is injected into the LLM prompt.
-```
+Skills define review behaviour. They are markdown files with YAML front matter that get injected into the LLM prompt.
 
 ### Built-in Skills
 
@@ -259,71 +214,115 @@ This content is injected into the LLM prompt.
 | `frontend` | `**/*.tsx`, `**/*.css` | React patterns, a11y, performance |
 | `backend` | `**/api/**`, `**/*.go` | API design, database, reliability |
 
-## Demo
+### Creating a Custom Skill
 
-See inline comments in action:
+```bash
+mkdir -p ~/.pr-review/skills/my-skill
+```
 
-**Live Demo:** https://github.com/theashishmaurya/pr-review-test/pull/2
+```markdown
+---
+name: My Custom Review
+description: Custom review rules for our codebase
+trigger:
+  - "**/*.ts"
+  - "src/**/*.js"
+priority: high
+---
 
-The agent posted inline comments on specific lines:
-- Line 4: ⚠️ Input validation issue
-- Line 9: 💡 Missing error handling
-- Line 14: ⚠️ Security concern
-- Line 19: ⚠️ Edge case not handled
+# My Custom Review Rules
 
-## How It Works
+## What to Check
+- No `any` types allowed
+- All public functions must have JSDoc comments
+- Max 50 lines per function
+```
 
-### Internal Flow
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         CLI Entry                               │
-│                    pr-review review --pr 13                     │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      GitHub Adapter                             │
-│  1. GET /repos/{owner}/{repo}/pulls/{pr_number}                │
-│     → PR metadata (title, description, author, branches)       │
-│                                                                 │
-│  2. GET /repos/{owner}/{repo}/pulls/{pr_number}/files          │
-│     → List of changed files with additions/deletions           │
-│                                                                 │
-│  3. GET /repos/{owner}/{repo}/pulls/{pr_number}                │
-│     Accept: application/vnd.github.v3.diff                     │
-│     → Raw diff content                                          │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      Context Builder                            │
-│  - Parse diff into hunks (old line, new line, content)         │
-│  - Match files against skills (glob patterns)                  │
-│  - Extract ticket IDs from description (PROJ-123, #456)        │
-│  - Build unified context object                                 │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                     Skill Loader                                │
-│  Load skills matching the changed files                         │
-│  Inject skill content into prompt                               │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                     LLM Backend                                 │
-│  Send prompt to Ollama/Claude/OpenAI                           │
-│  Parse response into structured review                          │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                    Post Review                                  │
-│  POST /repos/{owner}/{repo}/pulls/{pr_number}/reviews          │
-│  { event: "APPROVE|REQUEST_CHANGES", body, comments }          │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                        CLI Entry Point                           │
+│              node dist/cli.js review --pr 123 ...               │
+└──────────────────────────────────────────────────────────────────┘
+                               │
+                               ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                        PRReviewAgent                             │
+│   - Orchestrates VCS, LLM, and Skills                           │
+│   - Validates comment paths against diff                         │
+│   - Caches diff to avoid duplicate API calls                    │
+└──────────────────────────────────────────────────────────────────┘
+          │                    │                    │
+          ▼                    ▼                    ▼
+┌──────────────┐   ┌───────────────────┐   ┌──────────────────┐
+│ VCS Adapters │   │   LLM Backends    │   │  Skill Loader    │
+│              │   │                   │   │                  │
+│ - GitHub     │   │  BaseLLMBackend   │   │ Matches skills   │
+│ - Azure      │   │  ┌─────────────┐  │   │ by file glob     │
+│   DevOps     │   │  │ prompt.ts   │  │   │ patterns         │
+└──────────────┘   │  │ (shared)    │  │   └──────────────────┘
+                   │  └─────────────┘  │
+                   │  ┌─────────────┐  │
+                   │  │ parser.ts   │  │
+                   │  │ (shared)    │  │
+                   │  └─────────────┘  │
+                   │  ┌─────┐ ┌─────┐  │
+                   │  │Ollam│ │Claud│  │
+                   │  │  a  │ │  e  │  │
+                   │  └─────┘ └─────┘  │
+                   │  ┌─────┐          │
+                   │  │OpenA│          │
+                   │  │  I  │          │
+                   │  └─────┘          │
+                   └───────────────────┘
+                               │
+                               ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                        Output Layer                              │
+│  - Rich inline comments (Severity + Steps + AI Fix Prompt)      │
+│  - General summary comment                                       │
+│  - Verdict: approve | request_changes | comment                 │
+│  - Azure DevOps vote (approve/waiting for author)               │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### Key Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| `BaseLLMBackend` abstract class | `prompt.ts` and `parser.ts` are shared — adding a new provider requires only implementing `generate()` |
+| LCS-based diff for Azure DevOps | Azure DevOps API doesn't return unified diffs; we fetch file content at source/target commits and compute the diff ourselves |
+| Path normalisation in `postReview` | Azure DevOps paths have a leading `/`; LLM output may omit it — normalised paths are validated against actual diff file list before posting |
+| Model generates full markdown body | The LLM writes the entire comment (Severity, Steps, AI prompt) directly — no template stitching needed |
+
+## Project Structure
+
+```
+AgnusAi/
+├── src/
+│   ├── index.ts                  # PRReviewAgent orchestrator
+│   ├── cli.ts                    # CLI entry point
+│   ├── types.ts                  # TypeScript types
+│   ├── adapters/
+│   │   └── vcs/
+│   │       ├── base.ts           # VCSAdapter interface
+│   │       ├── github.ts         # GitHub adapter
+│   │       └── azure-devops.ts   # Azure DevOps adapter (LCS diff, path normalisation)
+│   └── llm/
+│       ├── base.ts               # BaseLLMBackend abstract class
+│       ├── prompt.ts             # Shared prompt builder
+│       ├── parser.ts             # Shared response parser
+│       ├── ollama.ts             # Ollama API call
+│       ├── claude.ts             # Claude API call
+│       └── openai.ts             # OpenAI API call
+├── skills/
+│   ├── default/SKILL.md
+│   ├── security/SKILL.md
+│   ├── frontend/SKILL.md
+│   └── backend/SKILL.md
+├── config.example.yaml
+└── package.json
 ```
 
 ## CI/CD Integration
@@ -331,7 +330,6 @@ The agent posted inline comments on specific lines:
 ### GitHub Actions
 
 ```yaml
-# .github/workflows/pr-review.yml
 name: AI PR Review
 on:
   pull_request:
@@ -343,53 +341,33 @@ jobs:
     permissions:
       pull-requests: write
       contents: read
-    
     steps:
       - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+
+      - uses: actions/setup-node@v4
         with:
           node-version: '20'
-      
-      - name: Install PR Review Agent
+
+      - name: Install AgnusAI
         run: |
-          git clone https://github.com/theashishmaurya/pr-review-agent.git
-          cd pr-review-agent
-          npm install
-          npm run build
-      
+          git clone https://github.com/ivoyant-eng/AgnusAi.git
+          cd AgnusAi && npm install && npm run build
+
       - name: Run Review
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # For remote Ollama:
-          # OLLAMA_HOST: ${{ secrets.OLLAMA_HOST }}
-          
-          # For Claude:
-          # ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          
-          # For OpenAI:
-          # OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          cd pr-review-agent
+          cd AgnusAi
           node dist/cli.js review \
             --pr ${{ github.event.pull_request.number }} \
             --repo ${{ github.repository }} \
-            --skill security
-      
-      - name: Post Review
-        if: always()
-        run: |
-          # Review is posted automatically by the agent
-          echo "Review posted!"
+            --provider claude
 ```
 
 ### Azure Pipelines
 
 ```yaml
-# azure-pipelines.yml
 trigger: none
 pr:
   - main
@@ -401,170 +379,55 @@ steps:
   - task: NodeTool@0
     inputs:
       versionSpec: '20.x'
-  
+
   - script: |
-      git clone https://github.com/theashishmaurya/pr-review-agent.git
-      cd pr-review-agent
-      npm install
-      npm run build
-    displayName: 'Install PR Review Agent'
-  
+      git clone https://github.com/ivoyant-eng/AgnusAi.git
+      cd AgnusAi && npm install && npm run build
+    displayName: 'Install AgnusAI'
+
   - script: |
-      cd pr-review-agent
+      cd AgnusAi
       node dist/cli.js review \
         --pr $(System.PullRequest.PullRequestId) \
-        --repo $(Build.Repository.Name) \
-        --vcs azure \
-        --azure-org $(System.TeamOrganization) \
-        --azure-project $(System.TeamProject)
+        --repo ivoyant/$(Build.Repository.Name) \
+        --vcs azure
     displayName: 'Run Review'
     env:
       AZURE_DEVOPS_TOKEN: $(System.AccessToken)
-      GITHUB_TOKEN: $(GITHUB_TOKEN)  # If using GitHub repos
-```
-
-### Trigger Model
-
-The agent is **pipeline-triggered**, not a running service:
-
-```
-PR opened/updated
-       │
-       ▼
-GitHub Actions / Azure Pipelines triggers
-       │
-       ▼
-Runner spins up, installs agent
-       │
-       ▼
-Agent reviews PR, posts comments
-       │
-       ▼
-Runner terminates
-```
-
-**Benefits:**
-- No running service to maintain
-- Fresh process for each review
-- No long-lived tokens
-- Scales automatically
-
-## VCS Support
-
-### GitHub (Full Support)
-
-```bash
-# Via gh CLI
-gh auth login
-GITHUB_TOKEN=$(gh auth token) node dist/cli.js review --pr 123 --repo owner/repo
-
-# Via PAT
-GITHUB_TOKEN=ghp_xxx node dist/cli.js review --pr 123 --repo owner/repo
-```
-
-### Azure DevOps (Phase 2)
-
-```bash
-AZURE_DEVOPS_TOKEN=xxx node dist/cli.js review \
-  --pr 456 \
-  --repo my-repo \
-  --vcs azure \
-  --azure-org my-org \
-  --azure-project my-project
-```
-
-## Architecture
-
-See [ADR-001-architecture.md](./ADR-001-architecture.md) for full design documentation.
-
-```
-pr-review-agent/
-├── src/
-│   ├── index.ts          # Main agent class
-│   ├── cli.ts            # CLI entry point
-│   ├── types.ts          # TypeScript types
-│   ├── adapters/
-│   │   ├── vcs/
-│   │   │   ├── base.ts
-│   │   │   ├── github.ts
-│   │   │   └── azure-devops.ts
-│   │   └── ticket/
-│   │       ├── base.ts
-│   │       ├── jira.ts
-│   │       └── linear.ts
-│   ├── llm/
-│   │   ├── base.ts
-│   │   ├── ollama.ts
-│   │   ├── claude.ts
-│   │   └── openai.ts
-│   ├── skills/
-│   │   └── loader.ts
-│   ├── context/
-│   │   └── builder.ts
-│   └── review/
-│       ├── engine.ts
-│       └── output.ts
-├── skills/
-│   ├── default/SKILL.md
-│   ├── security/SKILL.md
-│   ├── frontend/SKILL.md
-│   └── backend/SKILL.md
-├── package.json
-├── tsconfig.json
-└── config.example.yaml
+      ANTHROPIC_API_KEY: $(ANTHROPIC_API_KEY)
 ```
 
 ## Roadmap
 
-### Phase 1 ✅ (Complete)
-- [x] Skills folder structure
-- [x] GitHub adapter
-- [x] Ollama backend
-- [x] CLI skeleton
-- [x] Context builder
-- [x] Inline comments on specific lines
+### ✅ Phase 1 — Foundation
+- GitHub adapter
+- Ollama backend
+- CLI skeleton
+- Context builder
+- Inline comments on specific lines
 
-### Phase 2 ✅ (Complete)
-- [x] Claude backend
-- [x] OpenAI backend
-- [x] Azure DevOps adapter
+### ✅ Phase 2 — Multi-provider
+- Claude backend
+- OpenAI backend
+- Azure DevOps adapter with LCS-based real diff
+- Decoupled `prompt.ts` / `parser.ts` shared across all providers
+- Rich comment format (Severity, Steps of Reproduction, AI Fix Prompt)
 
-### Phase 3 (Planned)
-- [ ] Jira adapter
-- [ ] Linear adapter
-- [ ] GitHub Issues adapter
-- [ ] Azure Boards adapter
-- [ ] Memory system (learned conventions)
+### 🔲 Phase 3 — Ticket Integration
+- Jira adapter
+- Linear adapter
+- GitHub Issues adapter
+- Azure Boards adapter
+- Memory system (learned conventions)
 
-### Phase 4 (Future)
-- [ ] Binary distribution (pkg/bun)
-- [ ] npm global install
-- [ ] Homebrew formula
-- [ ] Self-review the repo
-
-## Development
-
-```bash
-# Install dependencies
-npm install
-
-# Build
-npm run build
-
-# Test locally
-GITHUB_TOKEN=$(gh auth token) node dist/cli.js review --pr 123 --repo owner/repo --dry-run
-
-# Run tests (coming soon)
-npm test
-```
+### 🔲 Phase 4 — Distribution
+- Binary distribution (pkg/bun)
+- npm global install
+- Homebrew formula
 
 ## Contributing
 
-1. Fork the repo
-2. Create a feature branch
-3. Make your changes
-4. Add tests if applicable
-5. Submit a PR
+See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## License
 
@@ -572,4 +435,4 @@ MIT
 
 ## Author
 
-[Ashish Maurya](https://github.com/theashishmaurya)
+[Ashish Maurya](https://github.com/theashishmaurya) — [ivoyant](https://github.com/ivoyant-eng)

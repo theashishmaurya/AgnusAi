@@ -1,705 +1,369 @@
-# ADR-001: PR Review Agent Architecture
+# ADR-001: AgnusAI — PR Review Agent Architecture
 
 ## Status
-**Implemented** ✅
+**Implemented** ✅ (Phase 1 & 2 complete)
+
+---
 
 ## Context
 
 We built an AI-powered PR review agent that:
 - Reviews pull requests on **GitHub** and **Azure DevOps**
-- Posts **inline comments** on specific lines in the diff
-- Adds meaningful review comments with verdicts
-- Runs locally via **Ollama** (with Claude/OpenAI backends available)
-- Integrates into CI/CD pipelines
+- Posts **rich inline comments** on specific diff lines with severity, steps of reproduction, and AI fix prompts
+- Supports **multiple LLM backends**: Ollama (local/free), Claude (Anthropic), OpenAI
+- Runs via CLI or in CI/CD pipelines — no continuously running service
 
 ### Constraints
-- Must run locally (no external API calls for code review)
-- Support multiple VCS platforms (GitHub, Azure DevOps)
-- Should be callable from CI pipelines (GitHub Actions, Azure Pipelines)
-- Token budget: ~32K context window for diffs + context
+- Must work locally with no external LLM API required (Ollama)
+- Support multiple VCS platforms without duplicating review logic
+- Prompt building and response parsing must be shared across all LLM providers
+- Token budget: ~30K characters for diff content
+- Azure DevOps does not expose a unified diff endpoint — diffs must be computed from file content
 
-## Decision
+---
 
-### High-Level Architecture
+## Architecture
+
+### High-Level Overview
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                        CI/CD Pipeline                           │
-│  (GitHub Actions / Azure Pipelines / Webhook Trigger)          │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      PR Review Agent                            │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────────────────┐  │
-││   VCS        │  │   Ticket    │  │   Review Engine         │  │
-││   Adapters   │  │   Adapters  │  │   (Claude Code + Ollama)│  │
-││              │  │             │  │                         │  │
-││ - GitHub     │  │ - Jira      │  │  - Diff Analysis        │  │
-│ │ - Azure     │  │ - Linear    │  │  - Code Understanding  │  │
-│ │   DevOps    │  │ - GH Issues │  │  - Comment Generation  │  │
-│ └─────────────┘  │ - Azure     │  │  - Suggestion Engine   │  │
-│                  │   Boards    │  └─────────────────────────┘  │
-│                  └─────────────┘                                 │
-└─────────────────────────────────────────────────────────────────┘
-                              │
-                              ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                     Output Layer                                │
-│  - Review Comments (inline + summary)                          │
-│  - Approval/Changes Requested                                   │
-│  - Ticket Linkages                                              │
-└─────────────────────────────────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                    CI/CD Pipeline or CLI                         │
+│          (GitHub Actions / Azure Pipelines / Terminal)          │
+└──────────────────────────────────────────────────────────────────┘
+                               │
+                               ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                        PRReviewAgent                             │
+│                         src/index.ts                             │
+│                                                                  │
+│  1. Fetches PR metadata, diff, and files from VCS               │
+│  2. Matches applicable skills by file glob patterns             │
+│  3. Builds ReviewContext and calls LLM.generateReview()         │
+│  4. Validates comment paths against actual diff file list       │
+│  5. Posts comments via VCS adapter                              │
+└──────────────────────────────────────────────────────────────────┘
+          │                    │                       │
+          ▼                    ▼                       ▼
+┌──────────────────┐  ┌─────────────────────┐  ┌──────────────────┐
+│   VCS Adapters   │  │    LLM Backends      │  │  Skill Loader    │
+│  src/adapters/   │  │    src/llm/          │  │  src/skills/     │
+│                  │  │                      │  │                  │
+│  GitHubAdapter   │  │  BaseLLMBackend      │  │  Reads SKILL.md  │
+│  AzureDevOps     │  │  (abstract)          │  │  files, matches  │
+│  Adapter         │  │  ┌────────────────┐  │  │  by glob pattern │
+│                  │  │  │  prompt.ts     │  │  │  against changed │
+│  Responsibilities│  │  │  (shared)      │  │  │  files           │
+│  - getPR()       │  │  └────────────────┘  │  └──────────────────┘
+│  - getDiff()     │  │  ┌────────────────┐  │
+│  - getFiles()    │  │  │  parser.ts     │  │
+│  - addInline     │  │  │  (shared)      │  │
+│    Comment()     │  │  └────────────────┘  │
+│  - submitReview()│  │                      │
+│                  │  │  ┌──────┐ ┌───────┐  │
+│  Azure specifics:│  │  │Ollama│ │Claude │  │
+│  - LCS diff from │  │  │      │ │       │  │
+│    file content  │  │  └──────┘ └───────┘  │
+│  - Path leading  │  │  ┌──────┐            │
+│    slash norm.   │  │  │OpenAI│            │
+└──────────────────┘  │  └──────┘            │
+                      └─────────────────────┘
+                               │
+                               ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                         Output Layer                             │
+│                                                                  │
+│  Inline comments (per file + line):                             │
+│  ┌────────────────────────────────────────────────────────────┐ │
+│  │ **Suggestion:** [description] [tag]                        │ │
+│  │ <details> Severity Level: Major ⚠️ </details>             │ │
+│  │ ```suggestion ... ```                                      │ │
+│  │ **Steps of Reproduction:**                                 │ │
+│  │ <details> Steps... </details>                             │ │
+│  │ <details> Prompt for AI Agent 🤖 </details>               │ │
+│  └────────────────────────────────────────────────────────────┘ │
+│                                                                  │
+│  General summary comment + verdict (approve/request_changes)    │
+│  Azure DevOps: sets reviewer vote                               │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-### Core Components
+---
 
-#### 1. VCS Adapters (Platform Abstraction)
+## Core Components
+
+### 1. VCS Adapters (`src/adapters/vcs/`)
+
+Abstract interface implemented by each platform:
 
 ```typescript
 interface VCSAdapter {
-  // PR Operations
-  getPR(prId: string): Promise<PullRequest>;
-  getDiff(prId: string): Promise<Diff>;
-  getFiles(prId: string): Promise<FileInfo[]>;
-  
-  // Comments
-  addComment(prId: string, comment: ReviewComment): Promise<void>;
-  addInlineComment(prId: string, path: string, line: number, body: string): Promise<void>;
-  submitReview(prId: string, review: Review): Promise<void>;
-  
-  // PR Metadata
-  getLinkedTickets(prId: string): Promise<Ticket[]>;
-  getAuthor(prId: string): Promise<Author>;
+  getPR(prId: string | number): Promise<PullRequest>;
+  getDiff(prId: string | number): Promise<Diff>;
+  getFiles(prId: string | number): Promise<FileInfo[]>;
+  addInlineComment(prId, path, line, body, severity): Promise<void>;
+  submitReview(prId: string | number, review: Review): Promise<void>;
+  getLinkedTickets(prId: string | number): Promise<Ticket[]>;
+  getFileContent(path: string, ref?: string): Promise<string>;
 }
 ```
 
-**Implementations:**
-- `GitHubAdapter` - REST API + GraphQL for advanced queries
-- `AzureDevOpsAdapter` - Azure DevOps REST API
+**GitHub** (`github.ts`): Uses `@octokit/rest`. Returns unified diffs directly from the GitHub API.
 
-#### 2. Ticket Adapters (Context Enrichment)
+**Azure DevOps** (`azure-devops.ts`):
+- Fetches PR iterations to get `sourceRefCommit` and `commonRefCommit` (merge base)
+- For each changed file, fetches content at both commits using the `/items` API
+- Computes a real unified diff using an LCS algorithm (O(m×n), capped at 600k pairs)
+- Generates `DiffHunk[]` with proper `@@ -old,n +new,n @@` headers
+- Normalises `filePath` to always include a leading `/` in thread context (Azure DevOps requirement)
+
+### 2. LLM Backends (`src/llm/`)
+
+All providers extend `BaseLLMBackend` and only implement `generate()`:
 
 ```typescript
-interface TicketAdapter {
-  getTicket(ticketId: string): Promise<Ticket>;
-  getTicketContext(ticketId: string): Promise<TicketContext>;
-}
+abstract class BaseLLMBackend {
+  abstract readonly name: string;
+  abstract generate(prompt: string, context: ReviewContext): Promise<string>;
 
-interface TicketContext {
-  title: string;
-  description: string;
-  acceptanceCriteria: string[];
-  relatedPRs: string[];
-  labels: string[];
-}
-```
-
-#### 3. Review Engine (Claude Code + Ollama)
-
-The brain of the operation. Takes diff + context, produces review.
-
-```typescript
-interface ReviewEngine {
-  analyzeDiff(diff: Diff, context: ReviewContext): Promise<ReviewResult>;
-}
-
-interface ReviewContext {
-  pr: PullRequest;
-  tickets: Ticket[];
-  codebase?: CodebaseContext;  // File tree, recent changes
-  reviewConfig: ReviewConfig;
-}
-
-interface ReviewResult {
-  summary: string;
-  comments: ReviewComment[];
-  suggestions: CodeSuggestion[];
-  verdict: 'approve' | 'request_changes' | 'comment';
+  // Shared — same for all providers
+  async generateReview(context: ReviewContext): Promise<ReviewResult> {
+    const prompt = buildReviewPrompt(context);   // prompt.ts
+    const response = await this.generate(prompt, context);
+    return parseReviewResponse(response);        // parser.ts
+  }
 }
 ```
 
-#### 4. Tool Layer (For Claude Code)
+#### `prompt.ts` — Shared Prompt Builder
 
-Tools exposed to Claude Code for performing review actions:
+Builds the full review prompt including:
+- PR metadata (title, author, branches, description)
+- File list with status and line counts
+- Unified diff (truncated at 30k characters)
+- Applicable skill content
+- Output format instructions with a concrete example comment showing the exact markdown structure expected
 
-```typescript
-const reviewTools = [
-  {
-    name: 'get_pr_diff',
-    description: 'Get the diff for a PR',
-    parameters: { pr_id: 'string', vcs: 'github | azure' }
-  },
-  {
-    name: 'get_pr_files',
-    description: 'List changed files in PR',
-    parameters: { pr_id: 'string' }
-  },
-  {
-    name: 'get_ticket',
-    description: 'Get ticket |
-  {
-    name:  
-    name: 'add_review_comment',
-    description: 'Add an inline review comment',
-       parameters: {
-      pr_id: 'string',
-      file_path: 'string',
-      line: 'number',
-      body: 'string',
-      severity: 'info | warning | error'
-    }
-  },
-  {
-    name: 'submit_review',
-    description: 'Submit the final review',
-    parameters: {
-      pr_id: 'string',
-      verdict: 'approve | request_changes | comment',
-      summary: 'string'
-    }
-  },
-  {
-    name: 'get_file_content',
-    description: 'Get content of a file for context|  
-];
-```
+#### `parser.ts` — Shared Response Parser
 
-### Data Flow
+Parses the LLM response by extracting `[File: /path, Line: N]` markers and treating everything after each marker (until the next marker or `VERDICT:`) as the pre-formatted markdown comment body.
+
+Falls back to legacy `[File: path, Line: number]` bracket format if no markers are found.
+
+### 3. Skill Loader (`src/skills/loader.ts`)
+
+Reads `SKILL.md` files from `~/.pr-review/skills/`, parses YAML front matter, and matches skills to changed files using glob patterns. Matched skill content is injected directly into the LLM prompt.
+
+### 4. PRReviewAgent (`src/index.ts`)
+
+Orchestrates the full review flow:
 
 ```
-1. Trigger: PR opened/updated
-   │
-   ▼
-2. Fetch PR Data
-   - Get diff (target branch vs PR branch)
-   - Get file list
-   - Get PR description (may contain ticket refs)
-│
-   ▼
-3. Enrich Context
-   - Parse ticket IDs from PR description/title
-   - Fetch ticket details (acceptance criteria, context)
-   - Optional: Get surrounding code context
-   │
-   ▼
-4. Run Review
-   - Claude Code analyzes diff with full context
-   - Generates structured review:
-     * Summary comment
-     * Inline comments on specific lines
-     * Code suggestions
-     * Verdict (approve/request changes)
-   │
-   ▼
-5. Submit Review
-   - Post comments via VCS API
-   - Set review status
-   - Link to related tickets
+review(prId):
+  1. getPR() + getDiff() + getFiles()   → parallel API calls
+  2. getLinkedTickets()                 → ticket context (Phase 3)
+  3. skills.matchSkills(filePaths)      → applicable skills
+  4. llm.generateReview(context)        → ReviewResult
+  5. cache diff for postReview()
+
+postReview(prId, result):
+  1. Build diffPathMap (normalised path → original path)
+  2. For each comment: validate path exists in diff
+  3. vcs.submitReview()                 → posts inline comments + summary
 ```
 
-### Prompt Structure
+---
+
+## Data Flow
 
 ```
-You are a code reviewer. Review this PR and provide actionable feedback.
-
-## Context
-{ticket_context}
-{pr_description}
-
-## Changed Files
-{file_list}
-
-## Diff
-{diff}
-
-## Review Guidelines
-- Focus on: correctness, security, performance, maintainability
-- Be constructive, not pedantic
-- Reference ticket requirements when relevant
-- Suggest improvements, don't just point out problems
-
-## Tools Available
-{tool_descriptions}
-
-## Output Format
-1. Analyze the diff
-2. Use tools to get additional context if needed
-3. Add inline comments for specific issues
-4. Submit review with summary and verdict
+PR opened / updated
+        │
+        ▼
+1. Fetch PR Data                    GitHub / Azure DevOps API
+   - PR metadata (title, branches)
+   - Diff (computed via LCS for Azure)
+   - Changed file list
+        │
+        ▼
+2. Build Context
+   - Filter ignored paths
+   - Match skills to file types
+   - Optional: enrich with file contents
+        │
+        ▼
+3. Generate Review                   Ollama / Claude / OpenAI
+   - buildReviewPrompt(context)      → prompt.ts (shared)
+   - provider.generate(prompt)       → API call
+   - parseReviewResponse(response)   → parser.ts (shared)
+        │
+        ▼
+4. Validate Comments
+   - Normalise paths (strip leading /)
+   - Match against actual diff file list
+   - Skip comments on files not in diff
+        │
+        ▼
+5. Post Review                       GitHub / Azure DevOps API
+   - Inline comment per file+line
+   - General summary comment
+   - Verdict / vote
 ```
 
-### Deployment Options
+---
 
-#### Option A: CLI Tool (MVP)
+## Key Design Decisions
 
-```bash
-pr-review review --pr 123 --repo owner/repo --vcs github
-pr-review review --pr 456 --repo project/repo --vcs azure
-```
+### Decision 1: Shared `prompt.ts` and `parser.ts`
 
-**Pros:** Simple, testable, can run locally  
-**Cons:** Manual trigger only
+**Problem:** All three LLM backends (Ollama, Claude, OpenAI) duplicated `buildReviewPrompt`, `buildDiffSummary`, and `parseReviewResponse` — ~400 lines of identical code.
 
-#### Option B: CI Integration
+**Decision:** Extract into shared modules. `BaseLLMBackend` calls them in `generateReview()`. Each provider only implements `generate()` (~15 lines).
 
-```yaml
-# GitHub Actions
-- name: AI PR Review
-  run: pr-review review --pr ${{ github.event.pull_request.number }} --vcs github
-  env:
-    GITHUB                                                     
-```
+**Result:** Adding a new LLM provider requires only implementing the API call. Prompt changes apply to all providers simultaneously.
 
-```yaml
-# Azure Pipelines
-- task: PRTask@1
-  inputs:
-    vcs: 'azure'
-    prId: '$(System.PullRequest.PullRequestId)'
-```
+### Decision 2: Azure DevOps LCS Diff
 
-**Pros:** Automatic on every PR  
-**Cons:** Requires CI setup
+**Problem:** The Azure DevOps API's `/iterations/{id}/changes` endpoint returns file change metadata (added/deleted counts) but not actual diff content. The agent had no real code to review.
 
-#### Option C: Webhook Server
+**Decision:** Fetch file content at `sourceRefCommit` and `commonRefCommit` (merge base) for each changed file, then compute a unified diff using Myers/LCS algorithm.
 
-```                                                       
-POST /webhook/github
-POST /webhook/azure
-```
+**Trade-offs:**
+- Extra API calls per file (2 per changed file)
+- LCS is O(m×n) — capped at 600k line pairs, falls back to full-replacement diff for very large files
+- Result: real `+`/`-` line diffs that the LLM can meaningfully analyse
 
-**Pros:** Real-time, no CI changes  
-**Cons:** Infrastructure, auth
+### Decision 3: LLM Generates Full Markdown Body
 
-### Recommended: Start with Option A → B
+**Problem:** Early versions built the comment template from structured fields (severity, impacts, steps) extracted from the LLM response. Local models (qwen3.5) didn't reliably follow the structured `COMMENT_START/COMMENT_END` format.
 
-1. **Phase 1:** CLI tool for manual testing
-2. **Phase 2:** CI integration for automation
-3. **Phase 3:** Webhook server if needed
+**Decision:** Show the LLM a concrete example of the full rendered markdown comment in the prompt. The LLM writes the entire body. The parser only extracts `[File: path, Line: N]` for positioning.
 
-## Consequences
+**Result:** More natural output, fewer parsing failures, easier to customise format by changing the prompt example.
 
-### Positive
-- Consistent review quality
-- Catches common issues before human review
-- Links code changes to ticket context
-- Runs locally (privacy, cost control)
-- Platform-agnostic design
+### Decision 4: Path Normalisation
 
-### Negative
-- Initial setup complexity
-- Model may miss nuanced issues
-- Need to tune prompts for codebase style
-- Token limits on large PRs
+**Problem:** Azure DevOps stores file paths with a leading `/` (e.g., `/src/foo.ts`). The LLM may omit it. Thread context `filePath` must match exactly, or Azure DevOps reports "file not found in PR".
 
-### Risks
-- Hallucinated comments (mitigate with validation)
-- Rate limits on VCS APIs (mitigate with batching)
-- Model bias (mitigate with prompt tuning)
+**Decision:** In `postReview`, build a `Map<normalisedPath, originalPath>` from the diff. Each comment's path is looked up after stripping the leading `/`. Comments with no matching path are skipped with a warning.
 
-## Implementation Plan
+### Decision 5: Pipeline-Triggered Model
 
-### Sprint 1: Foundation
-- [ ] Claude                                                           
-- [ ] GitHub adapter (get PR, get diff, add comments)
-- [ ] Basic review prompt
-- [ ] CLI interface
+**Decision:** The agent runs as a single-shot CLI process triggered by CI/CD or manually — not a long-running server.
 
-### Sprint 2: Azure + Tickets
-- [ ] Azure DevOps adapter
-- [ ] Ticket adapters (Jira, Linear)                                                    
-- [ ] Context enrichment
-- [ ] Better comment formatting
+**Benefits:** No idle costs, no state management, no long-lived tokens, scales automatically with CI runners.
 
-### Sprint                
-- [ ] CI integration (GitHub Actions, Azure Pipelines)
-- [ ] Review configuration (custom rules, severity levels)
-- [ ] Metrics (review quality, time saved)
+---
 
-### Sprint 4: Polish
-- [ ] Caching for repeated reviews
-- [ ] Incremental reviews (only new commits)
-- [ ] Review templates per repo
-- [ ] Documentation
+## Comment Format
 
-## Technology Stack
-
-| Component | Technology |
-|-----------|------------}
-| Review Engine | Claude Code + Ollama |
-| CLI Framework | Node.js (commander/yargs) |
-| VCS APIs | Octokit (GitHub), azure-devops-node-api |
-| Ticket APIs | jira.js, Linear SDK |
-| Config | YAML/JSON per repo |
-| Logging | Pino or Winston |
-
-## Configuration Example
-
-```yaml
-# .pr-review.yaml
-vcs:
-  github:
-    token: ${                                          
-  azure:
-    organization: myorg
-    project: myproject
-    token: ${AZURE_PAT}                                              
-
-tickets:
-  - type: jira
-    patterns:
-      - "[A-Z]+-\\d+"  # PROJ-123
-    adapter:
-      url: https://company.atlassian.net
-      token: ${JIRA_TOKEN}
-  - type: linear
-    patterns:
-      - "[A-Z]{2,}-\\d+"  # ENG-123
-    adapter:
-      apiKey: ${LINEAR_API_KEY}
-
-review:
-  maxDiffSize: 50000  # characters
-  focusAreas:
-    - security
-    - performance
-    - testing
-  ignorePaths:
-    - "*.lock"
-    - "dist/"
-    - "node_modules/"
-
-ollama:
-  model: claude-code
-  baseUrl: http://localhost:11434
-```
-
-## Skills-Based Review System
-
-Review behavior is driven by **skills** (like OpenClaw's skill system), not hardcoded rules.
-
-### Skills Architecture
-
-```
-~/.pr-review/
-├── skills/
-│   ├── default/
-│   │   └── SKILL.md          # Default review behavior
-│   ├── security/
-│   │   └── SKILL.md          # Security-focused reviews
-│   ├── frontend/
-│   │   └── SKILL.md          # React/TypeScript patterns
-│   ├── backend/
-│   │   └── SKILL.md          # API/Database patterns
-│   └── custom/
-│       └── SKILL.md          # User-defined skills
-├── memory/
-│   └── conventions.md        # Learned codebase conventions
-└── config.yaml
-```
-
-### Skill Structure
+Each inline comment follows this structure:
 
 ```markdown
----
-name: Frontend Review
-trigger:
-  - "src/**/*.tsx"
-  - "src/**/*.ts"
-  - "src/**/*.css"
-priority: high
----
+**Suggestion:** [one-sentence description of the issue] [tag]
 
-## Review Focus
-- Component structure and patterns
-- State management correctness
-- Accessibility (a11y)
-- Performance (React anti-patterns)
-- TypeScript type safety
+<details>
+<summary><b>Severity Level:</b> Major ⚠️</summary>
 
-## Common Issues to Catch
-- Missing useCallback for event handlers
-- Incorrect dependency arrays in useEffect
-- Unnecessary re-renders
-- Missing error boundaries
+```mdx
+- ⚠️ First concrete consequence
+- ⚠️ Second concrete consequence
+```
+</details>
 
-## Style Conventions
-- Use arrow functions for components
-- Prefer named exports
-- Colocate styles with components
+```suggestion
+corrected_code_here()
 ```
 
-### Skill Loading Logic
+**Steps of Reproduction:**
 
-1. **Detect file types** in PR diff
-2. **Match skills** by trigger patterns
-3. **Inject skill prompts** into review context
-4. **Apply skill-specific review rules**
+<details>
+<summary><b>Steps of Reproduction ✅</b></summary>
 
-### Benefits
-- Different review behavior per codebase
-- Team-specific conventions
-- Incremental skill library
-- Shareable across projects
-
----
-
-## LLM Configuration
-
-The review engine supports multiple LLM backends, configurable via CLI or config file.
-
-### Configurable Backend
-
-```yaml
-# config.yaml
-llm:
-  provider: ollama  # or "claude" or "openai"
-  model: qwen3.5:cloud
-  baseUrl: http://localhost:11434
-  
-  # Alternative configurations:
-  # provider: claude
-  # apiKey: ${ANTHROPIC_API_KEY}
-  # model: claude-sonnet-4-5-20250929
+```mdx
+1. Step one
+2. Step two
 ```
+</details>
 
-### CLI Usage
+<details>
+<summary><b>Prompt for AI Agent 🤖</b></summary>
 
-```bash
-# Use Ollama (default)
-pr-review --pr 123 --repo owner/repo
-
-# Use Claude Code
-pr-review --pr 123 --repo owner/repo --provider claude
-
-# Use specific Ollama model
-pr-review --pr 123 --repo owner/repo --model qwen3.5:cloud
-
-# Launch via Ollama (long-running)
-ollama launch claude --model qwen3.5:cloud
-pr-review --pr 123 --repo owner/repo
+```mdx
+This is a comment left during a code review.
+**Path:** /src/file.py
+**Line:** 42
+**Comment:** ...
+Validate the correctness of the flagged issue. If correct, how can I resolve this?
 ```
-
-### Backend Abstraction
-
-```typescript
-interface LLMBackend {
-  generate(prompt: string, context: ReviewContext): Promise<ReviewResult>;
-}
-
-class OllamaBackend implements LLMBackend {
-  constructor(model: string, baseUrl: string) {}
-}
-
-class ClaudeBackend implements LLMBackend {
-  constructor(apiKey: string, model: string) {}
-}
-
-class OpenAIBackend implements LLMBackend {
-  constructor(apiKey: string, model: string) {}
-}
+</details>
 ```
 
 ---
 
-## Binary Distribution
+## Implementation Status
 
-Distribute as a single binary (like CodeRabbit CLI).
+### ✅ Phase 1 — Foundation
+- [x] Skills folder structure and loader
+- [x] GitHub adapter (getPR, getDiff, inline comments)
+- [x] Ollama backend
+- [x] CLI skeleton (`review`, `skills`, `config` commands)
+- [x] Context builder
+- [x] Inline comments on specific diff lines
 
-### Build Targets
+### ✅ Phase 2 — Multi-provider + Azure
+- [x] Claude backend
+- [x] OpenAI backend
+- [x] Azure DevOps adapter with LCS-based real diff
+- [x] Decoupled `prompt.ts` / `parser.ts` shared across all providers
+- [x] Rich inline comment format (Severity, Steps of Reproduction, AI Fix Prompt)
+- [x] Path normalisation and validation before posting
+- [x] Duplicate comment fix (single post path)
 
-| Platform | Architecture | Binary Name |
-|----------|--------------|-------------|
-| Linux | x64 | `pr-review-linux-amd64` |
-| Linux | ARM64 | `pr-review-linux-arm64` |
-| macOS | x64 | `pr-review-darwin-amd64` |
-| macOS | ARM64 | `pr-review-darwin-arm64` |
-| Windows | x64 | `pr-review-windows-amd64.exe` |
-
-### Installation
-
-```bash
-# Install via curl
-curl -fsSL https://pr-review.dev/install.sh | bash
-
-# Install via npm
-npm install -g @pr-review/cli
-
-# Install via brew (future)
-brew install pr-review
-```
-
-### Build Technology
-
-- **Go** or **Rust** for single binary distribution
-- **Alternative:** Node.js packaged with `pkg` or `bun`
-- Include all adapters, no external dependencies
-
----
-
-## Trigger Model
-
-**Pipeline-triggered, NOT continuously running.**
-
-### Trigger Sources
-
-| Source | How It Works |
-|--------|--------------|
-| **CLI (Manual)** | User runs `pr-review --pr 123` |
-| **GitHub Actions** | Workflow step calls binary |
-| **Azure Pipelines** | Task calls binary |
-| **Webhook → CI** | Webhook triggers pipeline which runs binary |
-
-### GitHub Actions Example
-
-```yaml
-# .github/workflows/pr-review.yml
-name: AI PR Review
-on: 
-  pull_request:
-    types: [opened, synchronize]
-
-jobs:
-  review:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # Full history for better context
-      
-      - name: Setup PR Review
-        run: |
-          curl -fsSL https://pr-review.dev/install.sh | bash
-      
-      - name: Run Review
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OLLAMA_HOST: ${{ secrets.OLLAMA_HOST }}  # Optional: remote Ollama
-        run: |
-          pr-review --pr ${{ github.event.pull_request.number }} \
-                    --repo ${{ github.repository }} \
-                    --output review.json
-      
-      - name: Post Review
-        run: |
-          # Binary handles posting via GitHub API
-          # Or use action to post review.json content
-```
-
-### Azure Pipelines Example
-
-```yaml
-# azure-pipelines.yml
-trigger: none
-pr:
-  - main
-
-pool:
-  vmImage: 'ubuntu-latest'
-
-steps:
-  - script: |
-      curl -fsSL https://pr-review.dev/install.sh | bash
-    displayName: 'Install PR Review'
-  
-  - script: |
-      pr-review --pr $(System.PullRequest.PullRequestId) \
-                --repo $(Build.Repository.Name) \
-                --vcs azure \
-                --azure-org $(System.TeamOrganization) \
-                --azure-project $(System.TeamProject)
-    displayName: 'Run Review'
-    env:
-      AZURE_DEVOPS_TOKEN: $(System.AccessToken)
-```
-
-### Why NOT Continuously Running
-
-- **Cost:** No idle resource consumption
-- **Simplicity:** No server maintenance, auth, uptime concerns
-- **Scalability:** Each PR gets fresh process, no state management
-- **Security:** No long-lived tokens, fresh auth per run
-
----
-
-## Context Sources
-
-The agent aggregates context from multiple sources:
-
-| Source | How It's Used | Priority |
-|--------|---------------|----------|
-| **PR Diff** | Core content to review | Required |
-| **PR Description** | Understanding intent, linked tickets | High |
-| **Codebase Files** | Related files for context | Medium |
-| **Ticket Info** | Requirements, acceptance criteria | High (Phase 2) |
-| **Skills** | Review behavior, patterns | High |
-| **Memory** | Learned conventions, past feedback | Medium |
-| **Git History** | Related commits, authors | Low |
-
-### Context Building
-
-```typescript
-async function buildContext(pr: PullRequest): Promise<ReviewContext> {
-  return {
-    // Core
-    diff: await getDiff(pr),
-    files: await getChangedFiles(pr),
-    description: pr.description,
-    
-    // Enriched
-    relatedFiles: await findRelatedFiles(pr.files),
-    ticket: await extractTicketFromDescription(pr.description),
-    
-    // Skills
-    applicableSkills: await matchSkills(pr.files),
-    
-    // Memory
-    conventions: await loadConventions(pr.repo),
-    pastReviews: await loadPastReviews(pr.repo),
-  };
-}
-```
-
----
-
-## Phases
-
-### Phase 1: Foundation (Week 1-2)
-- [ ] Skills folder structure
-- [ ] GitHub adapter (get PR, diff, post comments)
-- [ ] Ollama backend integration
-- [ ] CLI binary (basic commands)
-- [ ] Default review skill
-
-### Phase 2: VCS + CI (Week 3-4)
-- [ ] Azure DevOps adapter
-- [ ] GitHub Actions integration
-- [ ] Azure Pipelines integration
-- [ ] Better error handling
-- [ ] Review output formatting
-
-### Phase 3: Integrations (Week 5-6)
-- [ ] Ticket integration framework
+### 🔲 Phase 3 — Ticket Integration
 - [ ] Jira adapter
 - [ ] Linear adapter
 - [ ] GitHub Issues adapter
 - [ ] Azure Boards adapter
-- [ ] Memory system (learned conventions)
+- [ ] Memory system (learned codebase conventions)
 
-### Phase 4: Polish & Distribution (Week 7-8)
-- [ ] Cross-platform binary builds
-- [ ] Installation scripts (curl, npm, brew)
-- [ ] Documentation
-- [ ] Example skills library
-- [ ] Self-reviewing the reviewer (dogfooding)
+### 🔲 Phase 4 — Distribution
+- [ ] Binary distribution (pkg / bun)
+- [ ] npm global install (`npm install -g agnus-ai`)
+- [ ] Homebrew formula
+- [ ] Self-review the reviewer (dogfooding)
 
 ---
 
-## Next Steps
+## Technology Stack
 
-1. Pull `qwen3.5:cloud` model via Ollama
-2. Create GitHub repo for project tracking
-3. Launch subagent with Claude Code + Ollama
-4. Build Phase 1 components
-5. Test on real PRs
+| Component | Technology |
+|-----------|------------|
+| Language | TypeScript / Node.js ≥ 18 |
+| CLI Framework | `commander` |
+| GitHub API | `@octokit/rest` |
+| Azure DevOps API | `node-fetch` (REST) |
+| HTTP Client | `node-fetch` |
+| Config | `js-yaml` |
+| LLM — Local | Ollama REST API |
+| LLM — Cloud | Anthropic Messages API, OpenAI Chat Completions API |
+| Diff Algorithm | Myers LCS (custom implementation) |
+
+## Consequences
+
+### Positive
+- Consistent review quality across all PRs
+- Catches common issues before human review
+- Provider-agnostic: swap LLM without touching prompts or parsing
+- Works fully offline with Ollama
+- Rich, actionable comment format with AI fix prompts
+
+### Negative
+- Local model (qwen3.5) may not follow output format as reliably as cloud models
+- Azure DevOps diff requires N×2 API calls for N changed files
+- Token limits cap diff size at ~30k characters
+
+### Risks
+- LLM hallucinating file paths (mitigated: path validation against actual diff)
+- LLM output format drift (mitigated: concrete example in prompt, fallback parser)
+- Azure DevOps API rate limits (mitigated: sequential file fetching)
