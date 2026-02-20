@@ -52,6 +52,7 @@ import {
   generateCheckpointComment
 } from './review/checkpoint';
 import { filterByConfidence, estimateConfidence } from './review/precision-filter';
+import { runStaticAnalysis } from './analysis/static-analyzer';
 
 /**
  * Result of an incremental review check
@@ -307,6 +308,23 @@ export class PRReviewAgent {
       files.map(f => f.path)
     );
 
+    // 3.5. Run static analysis (P1.2: Static Analysis Layer)
+    let staticFindings: import('./types').StaticFinding[] = [];
+    if (this.config.review?.staticAnalysis?.enabled !== false) {
+      try {
+        console.log('🔍 Running static analysis...');
+        staticFindings = await runStaticAnalysis(
+          process.cwd(),
+          this.config.review?.staticAnalysis || {}
+        );
+        if (staticFindings.length > 0) {
+          console.log(`📊 Static analysis found ${staticFindings.length} issues`);
+        }
+      } catch (error: any) {
+        console.warn(`Static analysis failed: ${error.message}`);
+      }
+    }
+
     // 4. Build context
     const context: ReviewContext = {
       pr,
@@ -314,6 +332,7 @@ export class PRReviewAgent {
       files,
       tickets,
       skills: applicableSkills,
+      staticFindings: staticFindings.length > 0 ? staticFindings : undefined,
       config: this.config.review
     };
 

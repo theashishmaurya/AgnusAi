@@ -88,6 +88,8 @@ export interface ReviewContext {
   tickets: Ticket[];
   skills: Skill[];
   config: ReviewConfig;
+  /** Static analysis findings from tsc, eslint, semgrep */
+  staticFindings?: StaticFinding[];
 }
 
 export interface ReviewResult {
@@ -111,6 +113,13 @@ export interface ReviewConfig {
   ignorePaths: string[];
   /** Minimum confidence threshold for comments (0.0-1.0). Default: 0.7 */
   precisionThreshold?: number;
+  /** Static analysis configuration */
+  staticAnalysis?: {
+    /** Whether static analysis is enabled */
+    enabled?: boolean;
+    /** Which tools to run */
+    tools?: ('tsc' | 'eslint' | 'semgrep')[];
+  };
 }
 
 export interface Skill {
@@ -372,4 +381,30 @@ export interface IncrementalReviewOptions {
   forceFull?: boolean;
   /** Skip updating the checkpoint after review */
   skipCheckpoint?: boolean;
+}
+
+// ============================================
+// Static Analysis Types
+// ============================================
+
+/**
+ * Represents a finding from static analysis tools (tsc, eslint, semgrep)
+ */
+export interface StaticFinding {
+  /** The tool that produced the finding */
+  tool: 'tsc' | 'eslint' | 'semgrep';
+  /** Path to the file */
+  path: string;
+  /** Line number (1-indexed) */
+  line: number;
+  /** Column number (1-indexed), optional */
+  column?: number;
+  /** Human-readable message */
+  message: string;
+  /** Severity level */
+  severity: 'error' | 'warning' | 'info';
+  /** Rule ID (e.g., ESLint rule, Semgrep rule), optional */
+  rule?: string;
+  /** Suggested fix, optional */
+  suggestedFix?: string;
 }

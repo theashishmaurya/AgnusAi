@@ -1,12 +1,16 @@
 // Shared prompt builder — provider-agnostic
 
-import { ReviewContext, Diff } from '../types';
+import { ReviewContext, Diff, StaticFinding } from '../types';
 
 export function buildReviewPrompt(context: ReviewContext): string {
-  const { pr, diff, skills, config } = context;
+  const { pr, diff, skills, config, staticFindings } = context;
 
   const skillContext = skills.length > 0
     ? `\n## Review Skills Applied\n${skills.map(s => s.content).join('\n\n')}`
+    : '';
+
+  const staticAnalysisSection = staticFindings && staticFindings.length > 0
+    ? `\n## Static Analysis Findings\nThe following issues were detected by static analysis tools. Consider these as context — they may inform your review but are NOT the primary focus.\n${formatStaticFindings(staticFindings)}\n`
     : '';
 
   const fileList = diff.files
@@ -35,7 +39,7 @@ ${fileList}
 
 ## Diff
 ${diffResult.content}
-${skillContext}
+${staticAnalysisSection}${skillContext}
 ${truncationWarning}
 
 ## Review Instructions
@@ -153,4 +157,32 @@ export function buildDiffSummary(diff: Diff, maxChars: number = 30000): { conten
   }
 
   return { content, truncated: false, truncatedCount: 0 };
+}
+
+/**
+ * Format static analysis findings for inclusion in the prompt
+ */
+function formatStaticFindings(findings: StaticFinding[]): string {
+  // Group by tool
+  const grouped: Record<string, StaticFinding[]> = {};
+  for (const finding of findings) {
+    if (!grouped[finding.tool]) {
+      grouped[finding.tool] = [];
+    }
+    grouped[finding.tool].push(finding);
+  }
+
+  let output = '';
+  for (const [tool, toolFindings] of Object.entries(grouped)) {
+    output += `\n### ${tool.toUpperCase()}\n`;
+    for (const f of toolFindings) {
+      output += `- **${f.path}:${f.line}** [${f.severity}] ${f.message}`;
+      if (f.rule) {
+        output += ` (${f.rule})`;
+      }
+      output += '\n';
+    }
+  }
+
+  return output;
 }
