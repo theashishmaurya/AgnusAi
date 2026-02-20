@@ -1,12 +1,19 @@
 // Comment Reply Thread Types and Utilities
 
-import { ReviewComment } from '../types';
+import { ReviewComment, DetailedReviewComment, CommentMetadata, CommentDismissal } from '../types';
 
 /**
  * Marker appended to all AgnusAI comments for identification
  * This allows us to detect when a user replies to our comments
  */
 export const AGNUSAI_MARKER = '<!-- AGNUSAI: v1 -->';
+
+/**
+ * Metadata marker for storing comment context
+ * Format: <!-- AGNUSAI_META: {...} -->
+ */
+export const AGNUSAI_META_MARKER_START = '<!-- AGNUSAI_META:';
+export const AGNUSAI_META_MARKER_END = '-->';
 
 /**
  * Represents a comment thread for reply handling

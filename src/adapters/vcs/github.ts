@@ -14,7 +14,8 @@ import {
   FileDiff,
   CommitComparison,
   PRComment,
-  ReviewCheckpoint
+  ReviewCheckpoint,
+  DetailedReviewComment
 } from '../../types';
 import { AGNUSAI_MARKER } from '../../review/thread';
 
@@ -105,12 +106,15 @@ export class GitHubAdapter implements VCSAdapter {
       else if (fileInfo.status === 'removed') status = 'deleted';
       else if (fileInfo.status === 'renamed') status = 'renamed';
 
+      // Handle both 'filename' (from GitHub API) and 'path' (from compareCommits)
+      const filePath = fileInfo.filename || fileInfo.path;
+      
       fileDiffs.push({
-        path: fileInfo.filename,
+        path: filePath,
         oldPath: fileInfo.previous_filename,
         status,
-        additions: fileInfo.additions,
-        deletions: fileInfo.deletions,
+        additions: fileInfo.additions || 0,
+        deletions: fileInfo.deletions || 0,
         hunks
       });
     }
@@ -234,13 +238,7 @@ export class GitHubAdapter implements VCSAdapter {
    * @param commentId The review comment ID
    * @returns The comment data
    */
-  async getReviewComment(commentId: number): Promise<{
-    id: number;
-    body: string;
-    user: { login: string } | null;
-    path?: string;
-    line?: number;
-  }> {
+  async getReviewComment(commentId: number): Promise<DetailedReviewComment> {
     const { data: comment } = await this.octokit.pulls.getReviewComment({
       owner: this.owner,
       repo: this.repo,
@@ -250,9 +248,19 @@ export class GitHubAdapter implements VCSAdapter {
     return {
       id: comment.id,
       body: comment.body || '',
-      user: comment.user ? { login: comment.user.login } : null,
+      user: {
+        login: comment.user?.login || 'unknown',
+        type: comment.user?.type || 'User'
+      },
       path: comment.path,
-      line: comment.line ?? undefined
+      line: comment.line ?? comment.original_line ?? null,
+      originalLine: comment.original_line ?? null,
+      position: comment.position ?? null,
+      commitId: comment.commit_id,
+      inReplyToId: comment.in_reply_to_id ?? null,
+      createdAt: comment.created_at,
+      updatedAt: comment.updated_at,
+      htmlUrl: comment.html_url
     };
   }
 
@@ -367,15 +375,16 @@ export class GitHubAdapter implements VCSAdapter {
         commit_id: pr.head.sha
       });
     } catch (error: any) {
-      // Fall back to COMMENT if REQUEST_CHANGES fails on own PR
-      if (review.verdict === 'request_changes' && error.message?.includes('your own pull request')) {
-        console.log('⚠️  Cannot request changes on own PR, posting as comment instead...');
+      // Fall back to COMMENT if APPROVE or REQUEST_CHANGES fails on own PR
+      const isOwnPrError = error.message?.includes('your own pull request');
+      if (isOwnPrError && (review.verdict === 'request_changes' || review.verdict === 'approve')) {
+        console.log(`⚠️  Cannot ${review.verdict === 'approve' ? 'approve' : 'request changes on'} own PR, posting as comment instead...`);
         await this.octokit.pulls.createReview({
           owner: this.owner,
           repo: this.repo,
           pull_number: Number(prId),
           event: 'COMMENT',
-          body: review.summary + '\n\n> ⚠️ **Note:** Would have requested changes, but this is your own PR.',
+          body: review.summary + `\n\n> ⚠️ **Note:** Would have ${review.verdict === 'approve' ? 'approved' : 'requested changes'}, but this is your own PR.`,
           comments,
           commit_id: pr.head.sha
         });
@@ -528,28 +537,57 @@ export class GitHubAdapter implements VCSAdapter {
 
   /**
    * Get all review comments on a PR (inline comments on code)
+   * Handles pagination to fetch ALL comments
    * 
    * @param prId PR number
-   * @returns List of review comments
+   * @returns List of detailed review comments
    */
-  async getReviewComments(prId: string | number): Promise<PRComment[]> {
-    const { data: comments } = await this.octokit.pulls.listReviewComments({
-      owner: this.owner,
-      repo: this.repo,
-      pull_number: Number(prId),
-      per_page: 100
-    });
+  async getReviewComments(prId: string | number): Promise<DetailedReviewComment[]> {
+    const comments: DetailedReviewComment[] = [];
+    let page = 1;
+    const perPage = 100;
+    let hasMore = true;
+    
+    while (hasMore) {
+      const { data: pageComments } = await this.octokit.pulls.listReviewComments({
+        owner: this.owner,
+        repo: this.repo,
+        pull_number: Number(prId),
+        per_page: perPage,
+        page
+      });
+      
+      for (const comment of pageComments) {
+        comments.push({
+          id: comment.id,
+          body: comment.body || '',
+          user: {
+            login: comment.user?.login || 'unknown',
+            type: comment.user?.type || 'User'
+          },
+          path: comment.path,
+          line: comment.line ?? comment.original_line ?? null,
+          originalLine: comment.original_line ?? null,
+          position: comment.position ?? null,
+          commitId: comment.commit_id,
+          inReplyToId: comment.in_reply_to_id ?? null,
+          createdAt: comment.created_at,
+          updatedAt: comment.updated_at,
+          htmlUrl: comment.html_url
+        });
+      }
+      
+      hasMore = pageComments.length === perPage;
+      page++;
+      
+      // Safety limit
+      if (page > 10) {
+        console.warn('Reached maximum pages fetching review comments');
+        break;
+      }
+    }
 
-    return comments.map(comment => ({
-      id: comment.id,
-      body: comment.body || '',
-      user: {
-        login: comment.user?.login || 'unknown',
-        type: comment.user?.type || 'User'
-      },
-      createdAt: comment.created_at,
-      updatedAt: comment.updated_at
-    }));
+    return comments;
   }
 
   /**
@@ -651,7 +689,7 @@ export class GitHubAdapter implements VCSAdapter {
 
   /**
    * Get incremental diff for a PR since a checkpoint
-   * 
+   *
    * @param prId PR number
    * @param checkpointSha The SHA from the last checkpoint
    * @returns Incremental diff or null if full review needed
@@ -662,8 +700,11 @@ export class GitHubAdapter implements VCSAdapter {
   ): Promise<{ diff: Diff; isIncremental: true } | { diff: null; isIncremental: false; reason: string }> {
     const headSha = await this.getHeadSha(prId);
 
+    console.log(`📊 Comparing commits: checkpoint=${checkpointSha.substring(0, 7)} HEAD=${headSha.substring(0, 7)}`);
+
     // If no new commits, no diff needed
     if (headSha === checkpointSha) {
+      console.log('✓ No new commits since checkpoint');
       return {
         diff: { files: [], additions: 0, deletions: 0, changedFiles: 0 },
         isIncremental: true
@@ -672,7 +713,10 @@ export class GitHubAdapter implements VCSAdapter {
 
     try {
       const comparison = await this.compareCommits(checkpointSha, headSha);
-      
+
+      console.log(`📊 Comparison status: ${comparison.status}, ahead_by=${comparison.aheadBy}, files=${comparison.files.length}`);
+      console.log(`📁 Changed files from comparison: ${comparison.files.map(f => f.path).join(', ')}`);
+
       // If diverged or behind, we need a full review
       if (comparison.status === 'diverged') {
         return {
@@ -692,6 +736,7 @@ export class GitHubAdapter implements VCSAdapter {
 
       // If identical, no changes
       if (comparison.status === 'identical') {
+        console.log('✓ Commits are identical, no changes');
         return {
           diff: { files: [], additions: 0, deletions: 0, changedFiles: 0 },
           isIncremental: true
@@ -699,7 +744,8 @@ export class GitHubAdapter implements VCSAdapter {
       }
 
       // Ahead - we have incremental changes
-      // Get full diff content for the changed files
+      // Fetch full diff content to get hunks for proper review
+      console.log(`📁 Fetching diff content for ${comparison.files.length} files...`);
       const diffResponse = await this.octokit.request(
         'GET /repos/{owner}/{repo}/compare/{basehead}',
         {
@@ -711,9 +757,10 @@ export class GitHubAdapter implements VCSAdapter {
       );
 
       const diffText = String(diffResponse.data);
-      
-      // Parse the diff
+
+      // Parse the diff to get hunks - use comparison files for metadata
       const files = this.parseDiff(diffText, comparison.files);
+      console.log(`📁 Parsed ${files.length} files with hunks from diff`);
 
       return {
         diff: {
@@ -734,6 +781,145 @@ export class GitHubAdapter implements VCSAdapter {
         };
       }
       throw error;
+    }
+  }
+
+  // ============================================
+  // PR State Methods
+  // ============================================
+
+  /**
+   * Check if PR is a draft
+   */
+  async isDraft(prId: string | number): Promise<boolean> {
+    const { data: pr } = await this.octokit.pulls.get({
+      owner: this.owner,
+      repo: this.repo,
+      pull_number: Number(prId)
+    });
+    return pr.draft ?? false;
+  }
+
+  /**
+   * Check if PR is merged
+   */
+  async isMerged(prId: string | number): Promise<boolean> {
+    const { data: pr } = await this.octokit.pulls.get({
+      owner: this.owner,
+      repo: this.repo,
+      pull_number: Number(prId)
+    });
+    return pr.merged ?? false;
+  }
+
+  /**
+   * Check if PR is closed
+   */
+  async isClosed(prId: string | number): Promise<boolean> {
+    const { data: pr } = await this.octokit.pulls.get({
+      owner: this.owner,
+      repo: this.repo,
+      pull_number: Number(prId)
+    });
+    return pr.state === 'closed';
+  }
+
+  /**
+   * Check if discussion is locked
+   */
+  async isLocked(prId: string | number): Promise<boolean> {
+    const { data: pr } = await this.octokit.pulls.get({
+      owner: this.owner,
+      repo: this.repo,
+      pull_number: Number(prId)
+    });
+    return pr.locked ?? false;
+  }
+
+  /**
+   * Get file renames in a PR
+   */
+  async getFileRenames(prId: string | number): Promise<Array<{ oldPath: string; newPath: string }>> {
+    const { data: files } = await this.octokit.pulls.listFiles({
+      owner: this.owner,
+      repo: this.repo,
+      pull_number: Number(prId),
+      per_page: 100
+    });
+
+    return files
+      .filter(f => f.status === 'renamed')
+      .map(f => ({
+        oldPath: f.previous_filename || '',
+        newPath: f.filename
+      }));
+  }
+
+  /**
+   * Find existing checkpoint comment
+   */
+  async findCheckpointComment(prId: string | number): Promise<PRComment | null> {
+    const comments = await this.getPRComments(prId);
+    
+    // Find the most recent checkpoint comment
+    const checkpointComments = comments.filter(c => 
+      c.body.includes('AGNUSAI_CHECKPOINT') || c.body.includes('AgnusAI Review Checkpoint')
+    );
+    
+    if (checkpointComments.length === 0) {
+      return null;
+    }
+    
+    // Return the most recent one
+    return checkpointComments.sort((a, b) => 
+      new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    )[0];
+  }
+
+  /**
+   * Update an existing review comment
+   */
+  async updateReviewComment(
+    prId: string | number,
+    commentId: string | number,
+    body: string
+  ): Promise<void> {
+    await this.octokit.pulls.updateReviewComment({
+      owner: this.owner,
+      repo: this.repo,
+      comment_id: Number(commentId),
+      body
+    });
+  }
+
+  /**
+   * Delete a review comment
+   */
+  async deleteReviewComment(
+    prId: string | number,
+    commentId: string | number
+  ): Promise<void> {
+    await this.octokit.pulls.deleteReviewComment({
+      owner: this.owner,
+      repo: this.repo,
+      comment_id: Number(commentId)
+    });
+  }
+
+  /**
+   * Get rate limit status
+   */
+  async getRateLimit(): Promise<{ limit: number; remaining: number; resetAt: Date } | null> {
+    try {
+      const { data } = await this.octokit.rateLimit.get();
+      const core = data.resources.core;
+      return {
+        limit: core.limit,
+        remaining: core.remaining,
+        resetAt: new Date(core.reset * 1000)
+      };
+    } catch {
+      return null;
     }
   }
 }
