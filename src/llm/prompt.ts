@@ -106,7 +106,8 @@ RULES:
 - The [File:, Line:] marker must use the EXACT path from the diff (including any leading slash)
 - The line number must appear in the diff
 - Output the full markdown body for every comment — do not shorten or summarise the sections
-- If the PR looks good output VERDICT: approve with no comments`;
+- If the PR looks good output VERDICT: approve with no comments
+- NEVER comment on whether a specific package/library version number is valid, exists, or is outdated. Your training data has a knowledge cutoff and package versions change constantly — you will be wrong. Skip ALL observations about version numbers, semver ranges, or whether a version is "the latest". Focus only on code logic, patterns, and correctness.`;
 }
 
 export function buildDiffSummary(diff: Diff): string {
