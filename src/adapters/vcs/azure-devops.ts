@@ -385,29 +385,56 @@ export class AzureDevOpsAdapter implements VCSAdapter {
     // Azure DevOps requires filePath to start with /
     const filePath = path.startsWith('/') ? path : `/${path}`;
 
+    // Fetch the latest iteration to get proper iteration context
+    const iterationsUrl = this.getGitApiUrl(
+      `/repositories/${this.repository}/pullrequests/${prId}/iterations?api-version=7.0`
+    );
+    const iterationsResponse = await fetch(iterationsUrl, { headers: this.getAuthHeaders() });
+    
+    let iterationId: number | undefined;
+    if (iterationsResponse.ok) {
+      const iterations = await iterationsResponse.json() as { value: Array<{ id: number }> };
+      if (iterations.value && iterations.value.length > 0) {
+        // Get the most recent iteration
+        iterationId = iterations.value[iterations.value.length - 1].id;
+      }
+    }
+
     const url = this.getGitApiUrl(
       `/repositories/${this.repository}/pullrequests/${prId}/threads?api-version=7.0`
     );
 
+    // Build the thread context with iteration info
+    const threadContext: any = {
+      filePath,
+      rightFileStart: { line, offset: 1 },
+      rightFileEnd: { line, offset: 1 }
+    };
+
+    // Include iteration context for proper line positioning
+    const requestBody: any = {
+      comments: [{
+        parentCommentId: 0,
+        content: body,
+        commentType: 'text'
+      }],
+      status: 'active',
+      threadContext
+    };
+
+    if (iterationId !== undefined) {
+      requestBody.iterationId = iterationId;
+    }
+
     const response = await fetch(url, {
       method: 'POST',
       headers: this.getAuthHeaders(),
-      body: JSON.stringify({
-        comments: [{
-          parentCommentId: 0,
-          content: body,
-          commentType: 'text'
-        }],
-        status: 'active',
-        threadContext: {
-          filePath,
-          rightFileStart: { line, offset: 1 },
-          rightFileEnd: { line, offset: 1 }
-        }
-      })
+      body: JSON.stringify(requestBody)
     });
 
     if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`Failed to add inline comment at ${filePath}:${line}: ${response.statusText} - ${errorText}`);
       throw new Error(`Failed to add inline comment: ${response.statusText}`);
     }
   }
