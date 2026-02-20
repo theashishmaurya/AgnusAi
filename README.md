@@ -4,33 +4,59 @@ An AI-powered code review agent that reviews pull requests on **GitHub** and **A
 
 ## Features
 
-- 🤖 **Unified LLM Backend** — Vercel AI SDK with support for Ollama, OpenAI, Azure OpenAI, and any OpenAI-compatible endpoint
+- 🤖 **Unified LLM Backend** — Vercel AI SDK with support for Ollama, OpenAI, Azure OpenAI, Claude, and any OpenAI-compatible endpoint
 - 🔄 **Multi-platform** — GitHub and Azure DevOps
 - 📍 **Inline Comments** — Rich formatted comments posted on specific lines in the diff
 - 📚 **Skills-based** — Pluggable review skills matched by file patterns
 - 🚀 **Pipeline-triggered** — Runs in CI/CD, no continuously running service
+- 🔁 **Incremental Reviews** — Checkpoint tracking: only reviews new commits since last run, no duplicate comments
+- 💬 **Comment Reply Threads** — Webhook-driven: users can reply to AI comments and get contextual responses
+- 🧹 **Smart Deduplication** — Skips already-reviewed lines, dismissed comments, binary/generated files, and lock files
 - 🔌 **Decoupled Architecture** — Prompt building and response parsing are shared across all providers
 
 ## Comment Format
 
 Every inline comment follows a rich structured format:
 
-```
+````markdown
 **Suggestion:** [description of the issue] [tag]
 
-<details>Severity Level: Major ⚠️</details>
+<details>
+<summary><b>Severity Level:</b> Major ⚠️</summary>
+
+```mdx
+- ⚠️ Impact point 1
+- ⚠️ Impact point 2
+```
+</details>
 
 ```suggestion
 // corrected code
 ```
 
 **Steps of Reproduction:**
-<details>Steps to reproduce...</details>
 
-<details>Prompt for AI Agent 🤖</details>
+<details>
+<summary><b>Steps of Reproduction ✅</b></summary>
+
+```mdx
+1. Step 1...
+2. Step 2...
 ```
+</details>
 
-Each comment includes collapsible **Severity**, **Steps of Reproduction**, and a ready-to-paste **AI Agent prompt** to fix the issue.
+<details>
+<summary><b>Prompt for AI Agent 🤖</b></summary>
+
+```
+[Ready-to-paste AI fix prompt]
+```
+</details>
+````
+
+**Severity levels:** 🚨 `error` (critical bugs, security) · ⚠️ `warning` · 💡 `info`
+
+All AgnusAI comments include a hidden marker (`[//]: # (AGNUSAI)`) so they can be identified and deduplicated across review runs.
 
 ## Quick Start
 
@@ -58,6 +84,8 @@ npm install
 npm run build
 ```
 
+**Requirements:** Node.js 18+
+
 ## Configuration
 
 ### Config File
@@ -81,7 +109,7 @@ vcs:
     token: ""              # or set AZURE_DEVOPS_TOKEN env var
 
 llm:
-  provider: ollama         # ollama | openai | azure | custom
+  provider: ollama         # ollama | openai | azure | claude | custom
   model: qwen3.5:cloud
   providers:
     ollama:
@@ -92,6 +120,8 @@ llm:
     azure:
       baseURL: https://your-resource.openai.azure.com/openai/deployments/gpt-4
       apiKey: ${AZURE_OPENAI_KEY}
+    claude:
+      apiKey: ${ANTHROPIC_API_KEY}
     custom:
       baseURL: https://your-endpoint.com/v1
       apiKey: ${CUSTOM_API_KEY}
@@ -115,6 +145,7 @@ review:
 |----------|-------------|--------------|
 | `GITHUB_TOKEN` | GitHub Personal Access Token | GitHub reviews |
 | `AZURE_DEVOPS_TOKEN` | Azure DevOps PAT | Azure DevOps reviews |
+| `ANTHROPIC_API_KEY` | Anthropic API Key | Claude provider |
 | `OPENAI_API_KEY` | OpenAI API Key | OpenAI provider |
 | `AZURE_OPENAI_KEY` | Azure OpenAI Key | Azure provider |
 | `CUSTOM_API_KEY` | Custom endpoint key | Custom provider |
@@ -125,28 +156,6 @@ See `.env.example` for full configuration options.
 
 AgnusAI uses Vercel AI SDK's `@ai-sdk/openai-compatible` package to support any OpenAI-compatible endpoint:
 
-- **Ollama** — Local, free (no API key needed)
-- **OpenAI** — GPT-4, GPT-4o
-- **Azure OpenAI** — Enterprise deployments
-- **Custom** — Any OpenAI-compatible endpoint (LM Studio, vLLM, etc.)
-
-### Quick Start with Ollama
-
-```bash
-ollama pull qwen3.5:cloud
-
-node dist/cli.js review --pr 123 --repo owner/repo --provider ollama --model qwen3.5:cloud
-```
-
-**Recommended Models:**
-
-| Model | Size | Best For |
-|-------|------|----------|
-| `qwen3.5:cloud` | ~0.5GB | Fast, general reviews |
-| `qwen3.5:397b-cloud` | Cloud | High quality reviews |
-| `codellama:70b` | 38GB | Complex code analysis |
-| `deepseek-coder:33b` | 19GB | Code-specific reviews |
-
 ### Claude (Best Quality)
 
 ```bash
@@ -155,7 +164,15 @@ export ANTHROPIC_API_KEY=sk-ant-...
 node dist/cli.js review --pr 123 --repo owner/repo --provider claude
 ```
 
-**Models:** `claude-sonnet-4-20250514` (default), `claude-opus-4-20250514`
+**Models:** `claude-sonnet-4-6` (default), `claude-opus-4-6`
+
+### Ollama (Local, Free)
+
+```bash
+ollama pull qwen3.5:cloud
+
+node dist/cli.js review --pr 123 --repo owner/repo --provider ollama --model qwen3.5:cloud
+```
 
 ### OpenAI
 
@@ -166,6 +183,34 @@ node dist/cli.js review --pr 123 --repo owner/repo --provider openai
 ```
 
 **Models:** `gpt-4o` (default), `gpt-4-turbo`, `gpt-3.5-turbo`
+
+### Azure OpenAI
+
+```bash
+export AZURE_OPENAI_KEY=...
+
+node dist/cli.js review --pr 123 --repo owner/repo --provider azure
+```
+
+### Custom / Self-hosted
+
+Any OpenAI-compatible endpoint (LM Studio, vLLM, etc.):
+
+```bash
+node dist/cli.js review --pr 123 --repo owner/repo \
+  --provider custom --model my-model
+```
+
+**Recommended Models:**
+
+| Model | Provider | Best For |
+|-------|----------|----------|
+| `claude-sonnet-4-6` | Claude | High quality, balanced |
+| `claude-opus-4-6` | Claude | Maximum quality |
+| `gpt-4o` | OpenAI | General reviews |
+| `qwen3.5:cloud` | Ollama | Fast, free, general |
+| `codellama:70b` | Ollama | Complex code analysis |
+| `deepseek-coder:33b` | Ollama | Code-specific reviews |
 
 ## CLI Commands
 
@@ -181,10 +226,13 @@ node dist/cli.js review \
 
 # Use a specific provider and model
 node dist/cli.js review --pr 123 --repo owner/repo \
-  --provider claude --model claude-sonnet-4-20250514
+  --provider claude --model claude-sonnet-4-6
 
 # Dry run — show review without posting comments
 node dist/cli.js review --pr 123 --repo owner/repo --dry-run
+
+# Incremental review — only review new commits since last run
+node dist/cli.js review --pr 123 --repo owner/repo --incremental
 
 # Output as JSON
 node dist/cli.js review --pr 123 --repo owner/repo --output json
@@ -219,9 +267,47 @@ AZURE_DEVOPS_TOKEN=xxx node dist/cli.js review \
   --vcs azure
 ```
 
+Azure DevOps does not expose a unified diff endpoint, so AgnusAI fetches file content at source and target commits and computes the diff using an LCS algorithm. Path normalization is applied automatically so inline comments always land on the correct lines.
+
+## Incremental Reviews
+
+With `--incremental`, AgnusAI tracks review state using a checkpoint stored as an HTML comment in the PR metadata. On subsequent runs:
+
+1. Only commits added **since the last checkpoint** are reviewed
+2. Files that haven't changed are skipped entirely
+3. Comments on lines that are identical to the previously reviewed version are deduplicated
+4. The checkpoint is updated after every successful run
+
+This prevents duplicate noise on PRs that receive multiple rounds of feedback.
+
+## Comment Reply Threads
+
+AgnusAI includes a webhook handler that enables two-way conversations on inline comments.
+
+When a user replies to an AgnusAI comment:
+1. A GitHub webhook delivers the `pull_request_review_comment` event
+2. The handler fetches the full thread history
+3. The LLM generates a contextual response (taking into account the original issue, the user's reply, and prior conversation)
+4. The response is posted as a reply in the thread
+
+Dismissal signals ("wontfix", "as designed", "intentional") are detected and the thread is closed gracefully.
+
+## Smart Deduplication
+
+AgnusAI applies multiple layers of filtering before posting any comment:
+
+- **Same-line deduplication** — will not post a second comment on a line that already has an AgnusAI comment
+- **Dismissed comments** — respects "wontfix" and similar signals; will not re-open resolved threads
+- **Fixed code** — detects when the code that triggered a comment has since been changed and skips re-commenting
+- **Binary files** — images, fonts, archives, and compiled assets are skipped
+- **Generated/minified files** — auto-generated files and minified bundles are skipped
+- **Lock files** — `package-lock.json`, `pnpm-lock.yaml`, etc. are always skipped
+- **Draft PRs** — draft PRs are skipped by default
+- **Merged/closed PRs** — already-merged PRs are skipped
+
 ## Skills
 
-Skills define review behaviour. They are markdown files with YAML front matter that get injected into the LLM prompt.
+Skills define review behaviour. They are Markdown files with YAML front matter that get injected into the LLM prompt.
 
 ### Built-in Skills
 
@@ -267,41 +353,48 @@ priority: high
                                ▼
 ┌──────────────────────────────────────────────────────────────────┐
 │                        PRReviewAgent                             │
-│   - Orchestrates VCS, LLM, and Skills                           │
-│   - Validates comment paths against diff                         │
-│   - Caches diff to avoid duplicate API calls                    │
+│   - Orchestrates VCS, LLM, Skills, and Checkpoint               │
+│   - Handles incremental diff fetching                           │
+│   - Coordinates deduplication and comment posting               │
 └──────────────────────────────────────────────────────────────────┘
-          │                    │                    │
-          ▼                    ▼                    ▼
-┌──────────────┐   ┌───────────────────┐   ┌──────────────────┐
-│ VCS Adapters │   │   LLM Backends    │   │  Skill Loader    │
-│              │   │                   │   │                  │
-│ - GitHub     │   │  BaseLLMBackend   │   │ Matches skills   │
-│ - Azure      │   │  ┌─────────────┐  │   │ by file glob     │
-│   DevOps     │   │  │ prompt.ts   │  │   │ patterns         │
-└──────────────┘   │  │ (shared)    │  │   └──────────────────┘
-                   │  └─────────────┘  │
-                   │  ┌─────────────┐  │
-                   │  │ parser.ts   │  │
-                   │  │ (shared)    │  │
-                   │  └─────────────┘  │
-                   │  ┌─────┐ ┌─────┐  │
-                   │  │Ollam│ │Claud│  │
-                   │  │  a  │ │  e  │  │
-                   │  └─────┘ └─────┘  │
-                   │  ┌─────┐          │
-                   │  │OpenA│          │
-                   │  │  I  │          │
-                   │  └─────┘          │
-                   └───────────────────┘
+        │              │              │              │
+        ▼              ▼              ▼              ▼
+┌────────────┐ ┌─────────────┐ ┌──────────┐ ┌──────────────────┐
+│VCS Adapters│ │ LLM Backend │ │  Skills  │ │   Checkpoint     │
+│            │ │             │ │  Loader  │ │   Manager        │
+│ - GitHub   │ │ Vercel AI   │ │          │ │                  │
+│ - Azure    │ │ SDK         │ │ Glob     │ │ Incremental SHA  │
+│   DevOps   │ │ ┌─────────┐ │ │ pattern  │ │ tracking via PR  │
+└────────────┘ │ │prompt.ts│ │ │ matching │ │ comment metadata │
+               │ └─────────┘ │ └──────────┘ └──────────────────┘
+               │ ┌─────────┐ │
+               │ │parser.ts│ │
+               │ └─────────┘ │
+               │ Ollama      │
+               │ Claude      │
+               │ OpenAI      │
+               │ Azure       │
+               │ Custom      │
+               └─────────────┘
                                │
                                ▼
 ┌──────────────────────────────────────────────────────────────────┐
-│                        Output Layer                              │
-│  - Rich inline comments (Severity + Steps + AI Fix Prompt)      │
-│  - General summary comment                                       │
+│                     Comment Manager                              │
+│  - Deduplication (same-line, dismissed, fixed, binary, locks)   │
+│  - Post inline comments with severity + steps + AI prompt       │
+│  - Post general summary comment                                  │
 │  - Verdict: approve | request_changes | comment                 │
-│  - Azure DevOps vote (approve/waiting for author)               │
+│  - Azure DevOps vote (approve / waiting for author)             │
+└──────────────────────────────────────────────────────────────────┘
+                               │
+                ┌──────────────┘
+                ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                   Webhook Handler (GitHub)                       │
+│  - Listens for pull_request_review_comment events               │
+│  - Builds thread history context                                 │
+│  - LLM generates contextual reply                               │
+│  - Posts reply via GitHub API                                   │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
@@ -310,35 +403,66 @@ priority: high
 | Decision | Rationale |
 |----------|-----------|
 | `BaseLLMBackend` abstract class | `prompt.ts` and `parser.ts` are shared — adding a new provider requires only implementing `generate()` |
-| LCS-based diff for Azure DevOps | Azure DevOps API doesn't return unified diffs; we fetch file content at source/target commits and compute the diff ourselves |
-| Path normalisation in `postReview` | Azure DevOps paths have a leading `/`; LLM output may omit it — normalised paths are validated against actual diff file list before posting |
-| Model generates full markdown body | The LLM writes the entire comment (Severity, Steps, AI prompt) directly — no template stitching needed |
+| LCS-based diff for Azure DevOps | Azure DevOps API doesn't return unified diffs; file content at source/target commits is fetched and diffed locally |
+| Path normalisation in `postReview` | Azure DevOps paths have a leading `/`; LLM output may omit it — normalised paths are validated against the actual diff file list before posting |
+| LLM generates full markdown body | The LLM writes the entire comment directly — no template stitching; avoids reliability issues with local models |
+| Checkpoint in PR comment metadata | Incremental state is stored as an HTML comment in the PR itself, requiring no external database |
 
 ## Project Structure
 
 ```
 AgnusAi/
 ├── src/
-│   ├── index.ts                  # PRReviewAgent orchestrator
-│   ├── cli.ts                    # CLI entry point
-│   ├── types.ts                  # TypeScript types
+│   ├── index.ts                    # PRReviewAgent — main orchestrator
+│   ├── cli.ts                      # CLI entry point (review, skills, config)
+│   ├── types.ts                    # TypeScript interfaces
+│   │
 │   ├── adapters/
-│   │   └── vcs/
-│   │       ├── base.ts           # VCSAdapter interface
-│   │       ├── github.ts         # GitHub adapter
-│   │       └── azure-devops.ts   # Azure DevOps adapter (LCS diff, path normalisation)
-│   └── llm/
-│       ├── base.ts               # BaseLLMBackend abstract class
-│       ├── prompt.ts             # Shared prompt builder
-│       ├── parser.ts             # Shared response parser
-│       ├── ollama.ts             # Ollama API call
-│       ├── claude.ts             # Claude API call
-│       └── openai.ts             # OpenAI API call
+│   │   ├── vcs/
+│   │   │   ├── base.ts             # VCSAdapter interface
+│   │   │   ├── github.ts           # GitHub implementation (Octokit)
+│   │   │   └── azure-devops.ts     # Azure DevOps (LCS diff, path normalisation)
+│   │   └── ticket/                 # Phase 3 — Ticket integration (stubs)
+│   │       ├── base.ts
+│   │       ├── jira.ts
+│   │       └── linear.ts
+│   │
+│   ├── llm/
+│   │   ├── base.ts                 # BaseLLMBackend abstract class
+│   │   ├── unified.ts              # UnifiedLLMBackend (Vercel AI SDK)
+│   │   ├── prompt.ts               # Shared prompt builder
+│   │   ├── parser.ts               # Shared response parser
+│   │   ├── ollama.ts
+│   │   ├── claude.ts
+│   │   └── openai.ts
+│   │
+│   ├── review/
+│   │   ├── engine.ts               # ReviewEngine — orchestrates review process
+│   │   ├── comment-manager.ts      # Platform-agnostic comment posting
+│   │   ├── deduplication.ts        # Comment filtering and dedup logic
+│   │   ├── checkpoint.ts           # Incremental review state tracking
+│   │   ├── thread.ts               # Comment thread types and utilities
+│   │   ├── reply.ts                # LLM-powered reply generation
+│   │   └── output.ts               # Output formatting
+│   │
+│   ├── context/
+│   │   ├── builder.ts              # ReviewContext assembly
+│   │   └── types.ts
+│   │
+│   ├── skills/
+│   │   └── loader.ts               # SkillLoader — glob pattern matching
+│   │
+│   └── webhook/
+│       └── handler.ts              # GitHub webhook handler for comment replies
+│
 ├── skills/
 │   ├── default/SKILL.md
 │   ├── security/SKILL.md
 │   ├── frontend/SKILL.md
 │   └── backend/SKILL.md
+│
+├── __tests__/                      # Jest test suite
+├── .env.example
 ├── config.example.yaml
 └── package.json
 ```
@@ -380,7 +504,8 @@ jobs:
           node dist/cli.js review \
             --pr ${{ github.event.pull_request.number }} \
             --repo ${{ github.repository }} \
-            --provider claude
+            --provider claude \
+            --incremental
 ```
 
 ### Azure Pipelines
@@ -418,43 +543,54 @@ steps:
 ## Roadmap
 
 ### ✅ Phase 1 — Foundation
-- [x] GitHub adapter
+- [x] GitHub adapter (Octokit)
 - [x] Ollama backend
-- [x] CLI skeleton
+- [x] CLI skeleton (`review`, `skills`, `config`)
 - [x] Context builder
-- [x] Inline comments on specific lines
+- [x] Inline comments on specific diff lines
+- [x] Skills-based review with glob pattern matching
 
-### ✅ Phase 2 — Multi-provider
+### ✅ Phase 2 — Multi-provider & Azure DevOps
 - [x] Claude backend
 - [x] OpenAI backend
-- [x] Azure DevOps adapter with LCS-based real diff
+- [x] Azure OpenAI backend
+- [x] Azure DevOps adapter with LCS-based diff computation
 - [x] Decoupled `prompt.ts` / `parser.ts` shared across all providers
 - [x] Rich comment format (Severity, Steps of Reproduction, AI Fix Prompt)
+
+### ✅ Phase 2.5 — Incremental Reviews & Comment Threading
+- [x] Incremental review with checkpoint tracking (`--incremental`)
+- [x] Only reviews new commits since last run; skips unchanged files
+- [x] Comment deduplication (same-line, dismissed, fixed code)
+- [x] Skips binary, generated, minified, and lock files
+- [x] Draft / merged / closed PR detection
+- [x] GitHub webhook handler for comment replies
+- [x] LLM-powered contextual reply generation
+- [x] Thread history tracking for coherent multi-turn conversations
+- [x] Dismissal detection ("wontfix", "as designed")
 
 ### 🔲 Phase 3 — Ticket Integration
 - [ ] Jira adapter
 - [ ] Linear adapter
 - [ ] GitHub Issues adapter
 - [ ] Azure Boards adapter
-- [ ] Memory system (learned conventions)
+- [ ] Memory system (learned codebase conventions)
 
 ### 🔲 Phase 4 — Distribution
-- [ ] Binary distribution (pkg/bun)
-- [ ] npm global install
+- [ ] Binary distribution (pkg / bun)
+- [ ] npm global install (`npx agnusai review ...`)
 - [ ] Homebrew formula
 
 ---
 
-## 🚀 v2 Roadmap — Closing the Gap with CodeRabbit
+## v2 Roadmap — Deeper Code Intelligence
 
-The following features are planned to bring AgnusAI to feature parity with CodeRabbit and beyond.
+The following features extend AgnusAI beyond diff-level reviews into full codebase understanding.
 
 ### Priority Overview
 
 | Priority | Feature | Impact | Effort | Status |
 |----------|---------|--------|--------|--------|
-| **P1** | Incremental PR Reviews | 🔴 High | 🟡 Medium | 🔲 Not Started |
-| **P1** | Comment Reply Handling | 🔴 High | 🟢 Low | 🔲 Not Started |
 | **P2** | TypeScript Type Checking | 🟡 Medium | 🟡 Medium | 🔲 Not Started |
 | **P2** | Codebase Embeddings | 🔴 High | 🔴 High | 🔲 Not Started |
 | **P3** | Multi-language LSP | 🟡 Medium | 🔴 High | 🔲 Not Started |
@@ -462,217 +598,100 @@ The following features are planned to bring AgnusAI to feature parity with CodeR
 
 ---
 
-### P1: Incremental PR Reviews
+### P2: TypeScript Type-Aware Reviews
 
-**Goal:** Only review new changes after user commits, avoiding duplicate reviews.
+Use the TypeScript Compiler API (`ts.createProgram`) to extract type information, diagnostics, and function signatures, then inject this context into the review prompt for richer analysis.
 
-| Component | Description | Status |
-|-----------|-------------|--------|
-| SHA Tracking | Store `lastReviewedSHA` in comment metadata | 🔲 |
-| GitHub Compare API | Use `/repos/{owner}/{repo}/compare/{base}...{head}` for incremental diff | 🔲 |
-| Comment Validation | Check if existing comments are still valid on changed files | 🔲 |
-| Stale Comment Handling | Mark or resolve outdated comments when files change | 🔲 |
-
-**Technical Approach:**
 ```
-GitHub Webhook → PR Event Handler → Incremental Diff Analyzer
+ts.createProgram() → TypeChecker → getTypeAtLocation()
      │
      ▼
-Check lastReviewedSHA → Fetch diff since last review → Review delta only
+Extract types, diagnostics, function signatures
      │
      ▼
-Update lastReviewedSHA in comment metadata
-```
-
----
-
-### P1: Comment Reply Handling (Conversation Threads)
-
-**Goal:** Handle replies to AI comments via webhook, enabling contextual conversations.
-
-| Component | Description | Status |
-|-----------|-------------|--------|
-| Webhook Handler | Listen for `pull_request_review_comment` events | 🔲 |
-| Reply API Integration | `POST /repos/{owner}/{repo}/pulls/{pull_number}/comments/{comment_id}/replies` | 🔲 |
-| Context Building | Include original issue + user's reply for LLM context | 🔲 |
-| Conversation Memory | Track thread history for coherent responses | 🔲 |
-
-**Technical Approach:**
-```
-User replies to AI comment → Webhook triggers handler
-     │
-     ▼
-Fetch original comment context → Build prompt with thread history
-     │
-     ▼
-LLM generates response → Post as reply via GitHub API
-```
-
----
-
-### P2: LSP Integration for Type-Aware Reviews
-
-**Goal:** Leverage TypeScript Compiler API for type-aware code reviews.
-
-| Component | Description | Status |
-|-----------|-------------|--------|
-| TypeScript Compiler API | Use `ts.createProgram()` for type analysis | 🔲 |
-| Type Extraction | `checker.getTypeAtLocation()` for symbol info | 🔲 |
-| Diagnostic Collection | Extract TypeScript errors/warnings | 🔲 |
-| Context Injection | Add type information to review prompt | 🔲 |
-| Signatures & Types | Include function signatures, return types, generics | 🔲 |
-
-**Technical Approach:**
-```
-LSP Manager → TypeScript Program (ts.createProgram)
-     │
-     ▼
-TypeChecker → getTypeAtLocation() → Extract types, diagnostics
-     │
-     ▼
-Context Builder → Inject type info into review prompt
-     │
-     ▼
-LLM Backend → Type-aware review with rich context
-```
-
-**Example Context Injection:**
-```typescript
-// Type context added to prompt
-// Function: `processData(input: unknown)`
-// Inferred type: `input: { id: string; data: Record<string, unknown> }`
-// Diagnostic: 'unsafe assignment of type `unknown`'
+Inject into review prompt → Type-aware LLM review
 ```
 
 ---
 
 ### P2: Codebase Embeddings (Context Awareness)
 
-**Goal:** Enable semantic codebase understanding for better review context.
+Chunk the codebase by function/class, generate embeddings via Vercel AI SDK `embedMany()`, and store them in a vector database (Qdrant). During review, retrieve semantically similar code patterns to enrich the review context.
 
-| Component | Description | Status |
-|-----------|-------------|--------|
-| Embedding Generation | Use Vercel AI SDK `embedMany()` for batch embeddings | 🔲 |
-| Vector Database | Store embeddings in Qdrant (recommended) | 🔲 |
-| Chunking Strategy | Chunk by function/class with metadata | 🔲 |
-| Similarity Search | Query similar patterns during review | 🔲 |
-| Dependents Query | Find files that import/depend on changed code | 🔲 |
-
-**Technical Approach:**
 ```
-Codebase → Chunker (function/class level) → embedMany()
+Codebase → Chunker (function/class) → embedMany() → Qdrant
      │
      ▼
-Vector DB (Qdrant) ← Store with metadata (file, line, type)
-     │
-     ▼
-During Review → Query similar patterns → Inject into context
-     │
-     ▼
-Impact Analysis → Find dependents/usages of changed code
-```
-
-**Metadata Schema:**
-```typescript
-interface CodeChunk {
-  id: string;
-  content: string;
-  embedding: number[];
-  metadata: {
-    file: string;
-    startLine: number;
-    endLine: number;
-    type: 'function' | 'class' | 'interface' | 'constant';
-    name: string;
-    exports: string[];
-    imports: string[];
-  };
-}
+During review → Query similar patterns → Inject into context
 ```
 
 ---
 
 ### P3: Multi-language LSP + Impact Analysis
 
-**Goal:** Extend LSP support beyond TypeScript and enable impact analysis.
+| Language | LSP Server |
+|----------|------------|
+| TypeScript | `ts.createProgram()` |
+| Python | Pyright / Pylance |
+| Go | gopls |
+| Rust | rust-analyzer |
+| Java | jdtls |
 
-| Language | LSP Server | Status |
-|----------|------------|--------|
-| TypeScript | `ts.createProgram()` | 🔲 (P2) |
-| Python | Pyright / Pylance | 🔲 |
-| Go | gopls | 🔲 |
-| Rust | rust-analyzer | 🔲 |
-| Java | jdtls | 🔲 |
-
-**Impact Analysis Features:**
-- [ ] Find all dependents of changed functions/classes
-- [ ] Detect breaking API changes
-- [ ] Suggest related files that may need updates
-- [ ] Generate call graphs for affected code paths
+**Impact Analysis:**
+- Find all dependents of changed functions/classes
+- Detect breaking API changes
+- Suggest related files that may need updates
+- Generate call graphs for affected code paths
 
 ---
 
-## Architecture Overview (v2)
+## Architecture Overview (v2 Target)
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│                         GitHub Webhook                               │
-│                   (PR events, comment replies)                       │
-└──────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                         GitHub Webhook                              │
+│                   (PR events, comment replies)                      │
+└─────────────────────────────────────────────────────────────────────┘
                                │
                                ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                        PR Event Handler                              │
-│              • Incremental Diff Analyzer                             │
-│              • Comment Manager (post/reply/resolve)                  │
-└──────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                        PR Event Handler                             │
+│              • Incremental Diff Analyzer                            │
+│              • Comment Manager (post/reply/resolve)                 │
+└─────────────────────────────────────────────────────────────────────┘
                                │
           ┌────────────────────┼────────────────────┐
           ▼                    ▼                    ▼
 ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
-│   LSP Manager    │  │   Context Builder │  │    Vector DB     │
-│                  │  │                   │  │    (Qdrant)      │
-│ • TypeScript     │  │ • Diff context    │  │                  │
-│ • Python (P3)    │  │ • Type info       │  │ • Embeddings     │
-│ • Go (P3)        │  │ • Similar code    │  │ • Metadata       │
-│ • Rust (P3)      │  │ • Thread history  │  │ • Queries        │
+│   LSP Manager    │  │  Context Builder  │  │    Vector DB     │
+│  (P2/P3)         │  │                   │  │    (Qdrant)      │
+│                  │  │ • Diff context    │  │                  │
+│ • TypeScript     │  │ • Type info       │  │ • Embeddings     │
+│ • Python (P3)    │  │ • Similar code    │  │ • Metadata       │
+│ • Go (P3)        │  │ • Thread history  │  │ • Similarity     │
+│ • Rust (P3)      │  │                   │  │   queries        │
 └──────────────────┘  └──────────────────┘  └──────────────────┘
           │                    │                    │
           └────────────────────┼────────────────────┘
                                ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                        LLM Backend                                   │
-│                   (Vercel AI SDK)                                    │
-│              • Ollama • Claude • OpenAI                              │
-└──────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                        LLM Backend (Vercel AI SDK)                  │
+│              Ollama • Claude • OpenAI • Azure • Custom              │
+└─────────────────────────────────────────────────────────────────────┘
                                │
                                ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                        Comment Manager                               │
-│              • Post inline comments                                   │
-│              • Reply to threads                                       │
-│              • Resolve stale comments                                 │
-│              • Update lastReviewedSHA                                 │
-└──────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                        Comment Manager                              │
+│              • Post inline comments                                 │
+│              • Reply to threads                                     │
+│              • Resolve stale comments                               │
+│              • Update checkpoint                                    │
+└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Implementation Order
-
-Recommended implementation sequence based on impact vs. effort:
-
-```
-Week 1-2:  P1 - Comment Reply Handling (Low effort, High impact)
-Week 2-3:  P1 - Incremental Reviews (Medium effort, High impact)
-Week 4-5:  P2 - TypeScript Type Checking (Medium effort, Medium impact)
-Week 6-8:  P2 - Codebase Embeddings (High effort, High impact)
-Week 9+:   P3 - Multi-language LSP + Impact Analysis
-```
-
----
-
-**Want to contribute?** Check our [CONTRIBUTING.md](./CONTRIBUTING.md) or pick up an issue from the roadmap!
+**Want to contribute?** Check [CONTRIBUTING.md](./CONTRIBUTING.md) or pick up an issue from the roadmap!
 
 ## Contributing
 
