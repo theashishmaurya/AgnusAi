@@ -11,6 +11,7 @@ export { TicketAdapter } from './adapters/ticket/base';
 export { OllamaBackend, createOllamaBackend } from './llm/ollama';
 export { ClaudeBackend, createClaudeBackend } from './llm/claude';
 export { OpenAIBackend, createOpenAIBackend } from './llm/openai';
+export { UnifiedLLMBackend, UnifiedLLMConfig, ProviderName, PROVIDER_PRESETS } from './llm/unified';
 export { LLMBackend } from './llm/base';
 
 export { SkillLoader } from './skills/loader';
@@ -36,6 +37,7 @@ import { TicketAdapter } from './adapters/ticket/base';
 import { LLMBackend } from './llm/base';
 import { SkillLoader } from './skills/loader';
 import { ReviewContext, ReviewResult, ReviewComment, Diff, Config, ReviewCheckpoint, IncrementalReviewOptions } from './types';
+import type { GraphReviewContext } from '@agnus-ai/shared';
 import { GitHubAdapter } from './adapters/vcs/github';
 import {
   findCheckpointComment,
@@ -269,7 +271,7 @@ export class PRReviewAgent {
     }
   }
 
-  async review(prId: string | number): Promise<ReviewResult> {
+  async review(prId: string | number, graphContext?: GraphReviewContext): Promise<ReviewResult> {
     // Reset checkpoint flag for new review
     this.checkpointHandled = false;
 
@@ -304,7 +306,8 @@ export class PRReviewAgent {
       files,
       tickets,
       skills: applicableSkills,
-      config: this.config.review
+      config: this.config.review,
+      graphContext,
     };
 
     // 5. Run review

@@ -1,4 +1,5 @@
 // Core types for the PR Review Agent
+import type { GraphReviewContext } from '@agnus-ai/shared'
 
 export interface PullRequest {
   id: string;
@@ -87,6 +88,7 @@ export interface ReviewContext {
   tickets: Ticket[];
   skills: Skill[];
   config: ReviewConfig;
+  graphContext?: GraphReviewContext;
 }
 
 export interface ReviewResult {

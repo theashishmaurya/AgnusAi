@@ -83,7 +83,8 @@ export class SkillLoader {
           result[key] = [];
         }
       } else if (line.startsWith('  - ') && currentKey) {
-        (result[currentKey] as any[]).push(line.slice(4));
+        const item = line.slice(4).trim().replace(/^['"]|['"]$/g, '');
+        (result[currentKey] as any[]).push(item);
       }
     }
 
