@@ -19,7 +19,7 @@ export default defineConfig({
       { text: 'Guide', link: '/guide/getting-started' },
       { text: 'Architecture', link: '/architecture/overview' },
       { text: 'API', link: '/api/rest' },
-      { text: 'GitHub', link: 'https://github.com/theashishmaurya/AgnusAi' },
+      { text: 'GitHub', link: 'https://github.com/ivoyant-eng/AgnusAi' },
     ],
 
     sidebar: [
@@ -103,7 +103,7 @@ export default defineConfig({
     ],
 
     socialLinks: [
-      { icon: 'github', link: 'https://github.com/theashishmaurya/AgnusAi' },
+      { icon: 'github', link: 'https://github.com/ivoyant-eng/AgnusAi' },
     ],
 
     search: {
@@ -116,7 +116,7 @@ export default defineConfig({
     },
 
     editLink: {
-      pattern: 'https://github.com/theashishmaurya/AgnusAi/edit/master/packages/docs/:path',
+      pattern: 'https://github.com/ivoyant-eng/AgnusAi/edit/master/packages/docs/:path',
       text: 'Edit this page on GitHub',
     },
   },

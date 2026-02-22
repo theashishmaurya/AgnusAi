@@ -12,7 +12,7 @@ The CLI reviewer works with no database, no server, and no indexing. It's the fa
 ## Installation
 
 ```bash
-git clone https://github.com/theashishmaurya/AgnusAi
+git clone https://github.com/ivoyant-eng/AgnusAi
 cd AgnusAi
 pnpm install
 pnpm --filter @agnus-ai/reviewer build

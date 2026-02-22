@@ -10,7 +10,7 @@
 ## Clone and Install
 
 ```bash
-git clone https://github.com/theashishmaurya/AgnusAi.git
+git clone https://github.com/ivoyant-eng/AgnusAi.git
 cd AgnusAi
 pnpm install
 ```

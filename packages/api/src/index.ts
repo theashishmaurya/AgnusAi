@@ -294,7 +294,7 @@ async function buildServer() {
       <nav>
         <a href="/app/">Dashboard</a>
         <a href="/docs/">Docs</a>
-        <a href="https://github.com/theashishmaurya/AgnusAi">GitHub</a>
+        <a href="https://github.com/ivoyant-eng/AgnusAi">GitHub</a>
       </nav>
     </div>
   </header>
@@ -337,7 +337,7 @@ async function buildServer() {
     <div class="ctas">
       <a class="cta-primary" href="/app/">Open Dashboard →</a>
       <a class="cta-secondary" href="/docs/">Read the Docs</a>
-      <a class="cta-secondary" href="https://github.com/theashishmaurya/AgnusAi" style="border-left: none;">View on GitHub</a>
+      <a class="cta-secondary" href="https://github.com/ivoyant-eng/AgnusAi" style="border-left: none;">View on GitHub</a>
     </div>
 
     <div class="features-section">

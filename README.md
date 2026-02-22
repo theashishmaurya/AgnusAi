@@ -20,7 +20,7 @@ AgnusAI indexes your codebase with Tree-sitter, builds a symbol dependency graph
 No server required. Just Node.js and an LLM.
 
 ```bash
-git clone https://github.com/theashishmaurya/AgnusAi.git
+git clone https://github.com/ivoyant-eng/AgnusAi.git
 cd AgnusAi
 pnpm install
 pnpm --filter @agnus-ai/reviewer build
@@ -66,7 +66,7 @@ Full graph-aware reviews via webhooks. Requires Docker.
 ### 1. Clone and configure
 
 ```bash
-git clone https://github.com/theashishmaurya/AgnusAi.git
+git clone https://github.com/ivoyant-eng/AgnusAi.git
 cd AgnusAi
 cp .env.example .env
 ```
@@ -288,7 +288,7 @@ jobs:
 
       - name: Install AgnusAI
         run: |
-          git clone https://github.com/theashishmaurya/AgnusAi.git _agnus
+          git clone https://github.com/ivoyant-eng/AgnusAi.git _agnus
           cd _agnus && pnpm install && pnpm --filter @agnus-ai/reviewer build
 
       - name: Run Review
@@ -314,7 +314,7 @@ pool:
 steps:
   - script: |
       npm install -g pnpm
-      git clone https://github.com/theashishmaurya/AgnusAi.git _agnus
+      git clone https://github.com/ivoyant-eng/AgnusAi.git _agnus
       cd _agnus && pnpm install && pnpm --filter @agnus-ai/reviewer build
     displayName: Install AgnusAI
 

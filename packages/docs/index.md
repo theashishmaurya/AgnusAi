@@ -14,7 +14,7 @@ hero:
       link: /architecture/overview
     - theme: alt
       text: GitHub
-      link: https://github.com/theashishmaurya/AgnusAi
+      link: https://github.com/ivoyant-eng/AgnusAi
 
 features:
   - icon: 🔍
