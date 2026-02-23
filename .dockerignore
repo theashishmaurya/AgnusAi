@@ -42,9 +42,3 @@ docker-compose*.yml
 Dockerfile*
 .dockerignore
 
-# Docs & dashboard sources (only dist matters)
-packages/docs
-packages/dashboard/src
-packages/dashboard/public
-packages/dashboard/*.config.*
-packages/dashboard/index.html
