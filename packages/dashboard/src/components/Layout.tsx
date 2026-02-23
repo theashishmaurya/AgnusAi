@@ -1,17 +1,18 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom'
-import { cn } from '@/lib/utils'
 import { useAuth } from '@/hooks/useAuth'
+import { useTheme } from '@/hooks/useTheme'
 
 const NAV_ITEMS = [
-  { href: '/app', label: 'Dashboard' },
-  { href: '/app/connect', label: 'Connect Repo' },
-  { href: '/app/settings', label: 'Settings' },
+  { href: '/app', label: 'dashboard' },
+  { href: '/app/connect', label: 'connect' },
+  { href: '/app/settings', label: 'settings' },
 ]
 
 export function Layout({ children }: { children: React.ReactNode }) {
   const { pathname } = useLocation()
   const navigate = useNavigate()
   const { user, mutate } = useAuth()
+  const { isDark, toggle } = useTheme()
 
   async function handleSignOut() {
     await fetch('/api/auth/logout', { method: 'POST', credentials: 'include' })
@@ -21,54 +22,126 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
-      {/* Top nav — thin, editorial */}
-      <header className="border-b border-border">
-        <div className="max-w-7xl mx-auto px-6 flex items-center justify-between h-12">
-          <div className="flex items-center gap-2">
-            {/* Orange badge — product name */}
-            <span className="bg-[#E85A1A] text-white text-xs tracking-widest uppercase px-2 py-0.5 font-normal">
-              AgnusAI
-            </span>
-            <span className="label-meta hidden sm:block text-muted-foreground/60">
-              Code Review
-            </span>
-          </div>
+      {/* Top nav — dark terminal header matching landing page */}
+      <header
+        style={{
+          background: 'var(--lp-hdr-bg)',
+          borderBottom: '1px solid var(--lp-hdr-border)',
+          position: 'sticky',
+          top: 0,
+          zIndex: 100,
+        }}
+      >
+        <div
+          style={{
+            maxWidth: '1200px',
+            margin: '0 auto',
+            padding: '0 24px',
+            height: '48px',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+          }}
+        >
+          {/* Brand — terminal style matching LandingHeader */}
+          <Link
+            to="/"
+            className="lp-mono"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '10px',
+              fontSize: '0.82rem',
+              color: 'var(--lp-hdr-fg)',
+              textDecoration: 'none',
+            }}
+          >
+            <span
+              style={{
+                width: '7px',
+                height: '7px',
+                borderRadius: '50%',
+                background: 'var(--syn-str)',
+              }}
+            />
+            <span style={{ fontWeight: 700 }}>~/agnus-ai</span>
+            <span
+              className="animate-blink"
+              style={{
+                display: 'inline-block',
+                width: '2px',
+                height: '14px',
+                background: 'var(--lp-accent)',
+              }}
+            />
+          </Link>
 
-          <div className="flex items-center gap-0">
-            <nav className="flex items-center gap-0">
-              {NAV_ITEMS.map((item) => {
-                const isActive = pathname === item.href ||
-                  (item.href !== '/app' && pathname.startsWith(item.href))
-                return (
-                  <Link
-                    key={item.href}
-                    to={item.href}
-                    className={cn(
-                      'label-meta px-4 h-12 flex items-center border-l border-border hover:text-foreground transition-colors',
-                      isActive ? 'text-foreground border-b-2 border-b-foreground' : ''
-                    )}
-                  >
-                    {item.label}
-                  </Link>
-                )
-              })}
-            </nav>
+          <nav style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+            {NAV_ITEMS.map((item) => {
+              const isActive =
+                pathname === item.href ||
+                (item.href !== '/app' && pathname.startsWith(item.href))
+              return (
+                <Link
+                  key={item.href}
+                  to={item.href}
+                  className="nav-pill"
+                  style={
+                    isActive
+                      ? { opacity: 1, borderColor: 'var(--lp-accent)', color: 'var(--lp-accent)' }
+                      : undefined
+                  }
+                >
+                  <span className="cmd">$</span> {item.label}
+                </Link>
+              )
+            })}
 
-            {/* User + sign out */}
             {user && (
-              <div className="flex items-center border-l border-border h-12">
-                <span className="label-meta px-4 text-muted-foreground hidden md:block">
+              <>
+                <span
+                  className="lp-mono"
+                  style={{
+                    fontSize: '0.62rem',
+                    color: 'var(--lp-hdr-fg)',
+                    opacity: 0.4,
+                    padding: '0 8px',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
                   {user.email}
                 </span>
                 <button
                   onClick={handleSignOut}
-                  className="label-meta px-4 h-12 flex items-center border-l border-border hover:text-foreground transition-colors"
+                  className="nav-pill"
+                  style={{ background: 'transparent', cursor: 'pointer' }}
                 >
-                  Sign out
+                  <span className="cmd">$</span> exit
                 </button>
-              </div>
+              </>
             )}
-          </div>
+
+            <button
+              onClick={toggle}
+              aria-label="Toggle theme"
+              style={{
+                background: 'transparent',
+                border: '1px solid var(--lp-hdr-border)',
+                borderRadius: '999px',
+                color: 'var(--lp-hdr-fg)',
+                cursor: 'pointer',
+                fontSize: '0.8rem',
+                width: '32px',
+                height: '28px',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                opacity: 0.65,
+              }}
+            >
+              {isDark ? '○' : '☽'}
+            </button>
+          </nav>
         </div>
       </header>
 
@@ -78,7 +151,13 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </main>
 
       {/* Bottom ticker — TinyFish style */}
-      <footer className="bg-foreground text-background border-t border-border overflow-hidden">
+      <footer
+        style={{
+          background: 'var(--lp-hdr-bg)',
+          borderTop: '1px solid var(--lp-hdr-border)',
+          overflow: 'hidden',
+        }}
+      >
         <div className="flex animate-ticker" style={{ width: 'max-content' }}>
           {[...Array(2)].map((_, i) => (
             <div key={i} className="flex items-center gap-0 shrink-0">
@@ -91,8 +170,23 @@ export function Layout({ children }: { children: React.ReactNode }) {
                 '100% Self-Hosted',
                 'Open Source',
               ].map((item) => (
-                <span key={item} className="flex items-center gap-6 px-8 py-3 label-meta text-background/70 border-r border-background/10">
-                  <span className="text-[#E85A1A]">•</span>
+                <span
+                  key={item}
+                  className="lp-mono"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '16px',
+                    padding: '10px 24px',
+                    fontSize: '0.58rem',
+                    letterSpacing: '0.12em',
+                    textTransform: 'uppercase',
+                    color: 'color-mix(in srgb, var(--lp-hdr-fg) 40%, transparent)',
+                    borderRight: '1px solid color-mix(in srgb, var(--lp-hdr-fg) 8%, transparent)',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  <span style={{ color: 'var(--lp-accent)', fontSize: '0.4rem' }}>◆</span>
                   {item}
                 </span>
               ))}

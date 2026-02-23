@@ -15,14 +15,14 @@
   /* Brand */
   --agnus-orange: #E85A1A;
 
-  /* Surfaces */
-  --agnus-bg:      #EBEBEA;   /* page background */
-  --agnus-surface: #F3F3F2;   /* sidebar, cards */
-  --agnus-border:  #D1D1CF;   /* hairline borders */
+  /* Surfaces — exactly matches dashboard --lp-* palette */
+  --agnus-bg:      #F5F4F0;   /* page background  (--lp-bg) */
+  --agnus-surface: #EFEDE9;   /* sidebar, cards   (--lp-card-bg) */
+  --agnus-border:  #E2E0DA;   /* hairline borders (--lp-border) */
 
   /* Text */
-  --agnus-text:    #111111;
-  --agnus-muted:   #6B6B6B;
+  --agnus-text:    #1C1C1A;   /* (--lp-fg) */
+  --agnus-muted:   #8A8880;   /* (--lp-muted) */
 
   /* Typography */
   --agnus-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
@@ -88,14 +88,14 @@
 
 /* ── Dark mode ───────────────────────────────────────────────────────────── */
 .dark {
-  /* Surfaces */
-  --agnus-bg:      #141413;
-  --agnus-surface: #1C1C1B;
-  --agnus-border:  #2E2E2C;
+  /* Surfaces — exactly matches dashboard [data-theme="dark"] palette */
+  --agnus-bg:      #131312;   /* (--background dark) */
+  --agnus-surface: #1C1C1A;   /* (--card dark) */
+  --agnus-border:  #2A2A27;   /* (--border dark) */
 
   /* Text */
-  --agnus-text:    #EBEBEA;
-  --agnus-muted:   #888884;
+  --agnus-text:    #E8E6E2;   /* (--foreground dark) */
+  --agnus-muted:   #6A6866;   /* (--muted-foreground dark) */
 
   --vp-c-bg:        var(--agnus-bg);
   --vp-c-bg-soft:   var(--agnus-surface);
@@ -108,10 +108,11 @@
   --vp-c-text-1:    var(--agnus-text);
   --vp-c-text-2:    var(--agnus-muted);
 
-  --vp-nav-bg-color:         var(--agnus-bg);
+  /* Nav uses same dark header as dashboard/landing (#1C1C1A) */
+  --vp-nav-bg-color:         #1C1C1A;
   --vp-sidebar-bg-color:     var(--agnus-surface);
 
-  --vp-code-bg:     #252523;
+  --vp-code-bg:     #222220;
   --vp-code-color:  #f0a070;
 }
 
@@ -288,7 +289,26 @@ body {
   color: var(--agnus-muted) !important;
 }
 
-/* ── Local search ────────────────────────────────────────────────────────── */
-.VPLocalSearchBox .search-input {
-  border-radius: var(--agnus-radius) !important;
+/* ── No rounded corners anywhere — TinyFish crisp aesthetic ─────────────── */
+.VPLocalSearchBox .search-input,
+.VPLocalSearchBox,
+.VPNavBarSearch .shell,
+.VPButton,
+.VPHomeHero .actions .VPButton,
+.vp-doc .custom-block,
+.vp-doc div[class*="language-"],
+.vp-doc :not(pre) > code,
+.VPFeature,
+.vp-doc table,
+.vp-doc td,
+.vp-doc th {
+  border-radius: 0 !important;
+}
+
+/* VitePress internal radius vars */
+:root {
+  --vp-border-radius: 0px;
+  --vp-button-border-radius: 0px;
+  --vp-input-border-radius: 0px;
+  --vp-badge-border-radius: 0px;
 }
