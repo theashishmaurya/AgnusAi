@@ -1,10 +1,15 @@
 import Fastify from 'fastify'
 import sensible from '@fastify/sensible'
+import fastifyCookie from '@fastify/cookie'
+import fastifyJwt from '@fastify/jwt'
 import path from 'path'
 import { Pool } from 'pg'
 import { webhookRoutes } from './routes/webhooks'
 import { repoRoutes } from './routes/repos'
+import { authRoutes } from './routes/auth'
 import { initGraphCache, warmupAllRepos } from './graph-cache'
+import { seedAdminUser } from './auth/seed'
+import { requireAuth } from './auth/middleware'
 
 // Extend FastifyInstance with db
 declare module 'fastify' {
@@ -21,6 +26,11 @@ async function buildServer() {
   const app = Fastify({ logger: true, bodyLimit: 10 * 1024 * 1024 })
 
   await app.register(sensible)
+  await app.register(fastifyCookie)
+  await app.register(fastifyJwt, {
+    secret: process.env.JWT_SECRET ?? process.env.SESSION_SECRET ?? 'changeme',
+    cookie: { cookieName: 'agnus_session', signed: false },
+  })
 
   // Raw body support for webhook signature verification
   app.addContentTypeParser('application/json', { parseAs: 'buffer' }, (req, body, done) => {
@@ -336,8 +346,7 @@ async function buildServer() {
 
     <div class="ctas">
       <a class="cta-primary" href="/app/">Open Dashboard →</a>
-      <a class="cta-secondary" href="/docs/">Read the Docs</a>
-      <a class="cta-secondary" href="https://github.com/ivoyant-eng/AgnusAi" style="border-left: none;">View on GitHub</a>
+      <a class="cta-secondary" href="https://github.com/ivoyant-eng/AgnusAi">View on GitHub</a>
     </div>
 
     <div class="features-section">
@@ -425,8 +434,52 @@ async function buildServer() {
   app.get('/api/health', async () => ({ status: 'ok', timestamp: new Date().toISOString() }))
 
   // Routes
+  await app.register(authRoutes)
   await app.register(webhookRoutes)
   await app.register(repoRoutes)
+
+  // GET /api/reviews — return last 50 reviews (auth required)
+  app.get('/api/reviews', { preHandler: [requireAuth] }, async (_req, reply) => {
+    const { rows } = await app.db.query(`
+      SELECT r.id, r.repo_id, r.pr_number, r.verdict, r.comment_count, r.created_at,
+             repos.repo_url
+      FROM reviews r
+      LEFT JOIN repos ON repos.repo_id = r.repo_id
+      ORDER BY r.created_at DESC LIMIT 50
+    `)
+    return reply.send(rows.map((r: any) => ({
+      id: r.id,
+      repoId: r.repo_id,
+      repoUrl: r.repo_url ?? '',
+      prNumber: r.pr_number,
+      verdict: r.verdict,
+      commentCount: r.comment_count,
+      createdAt: r.created_at,
+    })))
+  })
+
+  // GET /api/settings — read per-user settings (auth required)
+  app.get('/api/settings', { preHandler: [requireAuth] }, async (req, reply) => {
+    const user = req.user as { id: string }
+    const { rows } = await app.db.query(
+      'SELECT review_depth FROM user_settings WHERE user_id = $1',
+      [user.id],
+    )
+    return reply.send({ reviewDepth: rows[0]?.review_depth ?? 'standard' })
+  })
+
+  // POST /api/settings — upsert per-user settings (auth required)
+  app.post('/api/settings', { preHandler: [requireAuth] }, async (req, reply) => {
+    const user = req.user as { id: string }
+    const { reviewDepth } = req.body as { reviewDepth?: string }
+    const depth = reviewDepth ?? 'standard'
+    await app.db.query(
+      `INSERT INTO user_settings (user_id, review_depth) VALUES ($1, $2)
+       ON CONFLICT (user_id) DO UPDATE SET review_depth = EXCLUDED.review_depth`,
+      [user.id, depth],
+    )
+    return reply.send({ ok: true })
+  })
 
   // Serve VitePress docs at /docs
   const docsDist = process.env.DOCS_DIST ??
@@ -448,21 +501,40 @@ async function buildServer() {
     app.log.warn(`Docs not found at ${docsDist} — build with: pnpm --filter @agnus-ai/docs build`)
   }
 
-  // Optional: serve dashboard static files if DASHBOARD_DIST is set
+  // Serve dashboard SPA at /app/*
   const dashboardDist = process.env.DASHBOARD_DIST ??
     path.join(__dirname, '../../dashboard/dist')
-  try {
-    const fs = await import('fs')
-    if (fs.existsSync(dashboardDist)) {
-      const fastifyStatic = await import('@fastify/static')
-      await app.register(fastifyStatic.default, {
-        root: dashboardDist,
-        prefix: '/app',
-        decorateReply: false,
-      })
-    }
-  } catch {
-    // Dashboard not built yet — skip static file serving
+  const fsDash = await import('fs')
+  if (fsDash.existsSync(dashboardDist)) {
+    const fastifyStatic = await import('@fastify/static')
+    // wildcard: false — plugin decorates reply.sendFile() but does NOT register
+    // GET /app/* itself, so we can register our own SPA-aware wildcard below.
+    await app.register(fastifyStatic.default, {
+      root: dashboardDist,
+      prefix: '/app/',
+      decorateReply: true,
+      wildcard: false,
+    })
+
+    // /app → /app/ redirect
+    app.get('/app', async (_req, reply) => reply.redirect(301, '/app/'))
+
+    // Single wildcard: serve the real asset file if it exists (hashed JS/CSS),
+    // otherwise return index.html so React Router handles the path client-side.
+    app.get('/app/*', async (req, reply) => {
+      const reqPath = (req.params as any)['*'] as string ?? ''
+      if (reqPath) {
+        const filePath = path.join(dashboardDist, reqPath)
+        if (fsDash.existsSync(filePath) && fsDash.statSync(filePath).isFile()) {
+          return reply.sendFile(reqPath)
+        }
+      }
+      return reply.sendFile('index.html')
+    })
+
+    app.log.info(`Dashboard served at /app/ from ${dashboardDist}`)
+  } else {
+    app.log.warn(`Dashboard not found at ${dashboardDist} — run: pnpm --filter @agnus-ai/dashboard build`)
   }
 
   return app
@@ -489,10 +561,50 @@ async function main() {
       platform TEXT NOT NULL,
       token TEXT,
       repo_path TEXT,
+      indexed_at TIMESTAMPTZ,
+      symbol_count INT DEFAULT 0,
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
   `)
+  // Idempotent column additions for repos already created without these columns
+  await pool.query(`ALTER TABLE repos ADD COLUMN IF NOT EXISTS indexed_at TIMESTAMPTZ`)
+  await pool.query(`ALTER TABLE repos ADD COLUMN IF NOT EXISTS symbol_count INT DEFAULT 0`)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      email TEXT UNIQUE NOT NULL,
+      password_hash TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'member',
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS invites (
+      token TEXT PRIMARY KEY,
+      email TEXT,
+      created_by TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      used_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS reviews (
+      id TEXT PRIMARY KEY,
+      repo_id TEXT NOT NULL REFERENCES repos(repo_id) ON DELETE CASCADE,
+      pr_number INT NOT NULL,
+      verdict TEXT,
+      comment_count INT DEFAULT 0,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_settings (
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      review_depth TEXT NOT NULL DEFAULT 'standard'
+    )
+  `)
   app.log.info('Database schema migrated')
+  await seedAdminUser(pool)
 
   try {
     await warmupAllRepos()
