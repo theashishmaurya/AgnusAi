@@ -14,6 +14,15 @@
     <meta name="author" content="AgnusAI" />
     <meta name="theme-color" content="#131312" />
 
+    <!-- Set theme before React loads to avoid flash of wrong theme.
+         Default is dark unless user has explicitly saved 'light'. -->
+    <script>
+      (function(){
+        var t = localStorage.getItem('agnus-theme');
+        if (t !== 'light') document.documentElement.setAttribute('data-theme','dark');
+      })();
+    </script>
+
     <!-- Open Graph -->
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://agnusai.dev/" />
