@@ -1,8 +1,9 @@
-import { useState } from 'react'
-import { Check } from 'lucide-react'
+import { useState, useEffect } from 'react'
+import { Check, Copy, CheckCircle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { useAuth } from '@/hooks/useAuth'
 
 type Depth = 'fast' | 'standard' | 'deep'
 
@@ -39,13 +40,52 @@ const DEPTH_OPTIONS: Array<{
 ]
 
 export default function Settings() {
+  const { user } = useAuth()
   const [depth, setDepth] = useState<Depth>('standard')
   const [saved, setSaved] = useState(false)
+  const [inviteUrl, setInviteUrl] = useState('')
+  const [inviteCopied, setInviteCopied] = useState(false)
+  const [inviteLoading, setInviteLoading] = useState(false)
+
+  // Load saved depth on mount
+  useEffect(() => {
+    fetch('/api/settings', { credentials: 'include' })
+      .then(r => r.ok ? r.json() as Promise<{ reviewDepth: Depth }> : null)
+      .then(d => { if (d?.reviewDepth) setDepth(d.reviewDepth) })
+      .catch(() => {})
+  }, [])
 
   async function save() {
-    // POST REVIEW_DEPTH to server settings endpoint (stubbed for now)
+    await fetch('/api/settings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ reviewDepth: depth }),
+    })
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
+  }
+
+  async function generateInvite() {
+    setInviteLoading(true)
+    try {
+      const res = await fetch('/api/auth/invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({}),
+      })
+      const d = await res.json() as { url: string }
+      setInviteUrl(d.url)
+    } finally {
+      setInviteLoading(false)
+    }
+  }
+
+  function copyInvite() {
+    navigator.clipboard.writeText(inviteUrl)
+    setInviteCopied(true)
+    setTimeout(() => setInviteCopied(false), 2000)
   }
 
   return (
@@ -116,7 +156,6 @@ export default function Settings() {
                 key={ci}
                 className={cn(
                   'px-4 py-3 font-mono text-sm',
-                  // Highlight selected column
                   (ci === 0 && depth === 'fast') ||
                   (ci === 1 && depth === 'standard') ||
                   (ci === 2 && depth === 'deep')
@@ -134,6 +173,48 @@ export default function Settings() {
       <Button size="lg" onClick={save} disabled={saved}>
         {saved ? '✓ Saved' : 'Save Settings'}
       </Button>
+
+      {/* Team section — admin only */}
+      {user?.role === 'admin' && (
+        <div className="mt-16">
+          <p className="label-meta mb-4">Team</p>
+          <h2 className="text-2xl font-bold tracking-tight text-foreground mb-8">
+            Invite Members.
+          </h2>
+
+          <div className="border-t border-border pt-6">
+            <p className="text-sm text-muted-foreground mb-6">
+              Generate a one-time invite link. The recipient will be able to create an account.
+            </p>
+
+            <Button
+              size="lg"
+              variant="outline"
+              onClick={generateInvite}
+              disabled={inviteLoading}
+            >
+              {inviteLoading ? 'Generating...' : 'Generate Invite Link'}
+            </Button>
+
+            {inviteUrl && (
+              <div className="flex items-stretch border border-border mt-6">
+                <div className="flex-1 px-4 py-3 font-mono text-sm text-muted-foreground overflow-x-auto whitespace-nowrap bg-muted/20">
+                  {inviteUrl}
+                </div>
+                <button
+                  onClick={copyInvite}
+                  className="flex items-center gap-2 px-4 border-l border-border label-meta hover:bg-muted/30 transition-colors"
+                >
+                  {inviteCopied
+                    ? <><CheckCircle className="h-3.5 w-3.5 text-[#E85A1A]" /> COPIED</>
+                    : <><Copy className="h-3.5 w-3.5" /> COPY</>
+                  }
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -1,12 +1,16 @@
+import { useState } from 'react'
 import useSWR from 'swr'
-import { Link } from 'react-router-dom'
-import { Badge } from '@/components/ui/badge'
+import { Link, useNavigate } from 'react-router-dom'
+import { Trash2, RefreshCw } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface Repo {
   repoId: string
   repoUrl: string
   platform: 'github' | 'azure'
+  repoPath: string | null
+  indexedAt: string | null
+  symbolCount: number
   createdAt: string
 }
 
@@ -21,7 +25,7 @@ interface Review {
   createdAt: string
 }
 
-const fetcher = (url: string) => fetch(url).then(r => r.json())
+const fetcher = (url: string) => fetch(url, { credentials: 'include' }).then(r => r.json())
 
 const VERDICT_LABEL: Record<string, string> = {
   approve: 'Approved',
@@ -36,39 +40,86 @@ const VERDICT_COLOR: Record<string, string> = {
 }
 
 export default function Dashboard() {
-  const { data: repos } = useSWR<Repo[]>('/api/repos', fetcher, { refreshInterval: 30000 })
+  const { data: repos, mutate: mutateRepos } = useSWR<Repo[]>('/api/repos', fetcher, { refreshInterval: 30000 })
   const { data: reviews } = useSWR<Review[]>('/api/reviews', fetcher, { refreshInterval: 30000 })
+  const navigate = useNavigate()
 
   const hasData = repos && repos.length > 0
+
+  async function handleDelete(repoId: string, repoUrl: string) {
+    const name = repoUrl.replace('https://github.com/', '').replace('https://dev.azure.com/', '')
+    if (!window.confirm(`Delete "${name}"? This cannot be undone.`)) return
+    await fetch(`/api/repos/${repoId}`, { method: 'DELETE', credentials: 'include' })
+    mutateRepos()
+  }
+
+  async function handleReindex(repoId: string) {
+    const res = await fetch(`/api/repos/${repoId}/reindex`, { method: 'POST', credentials: 'include' })
+    const data = await res.json() as { branches?: string[] }
+    const branch = data.branches?.[0] ?? 'main'
+    navigate(`/app/indexing/${repoId}?branch=${encodeURIComponent(branch)}`)
+  }
 
   return (
     <div>
       {!hasData ? (
-        // Empty state — TinyFish editorial hero
         <EmptyState />
       ) : (
         <div className="space-y-16">
           {/* Repos section */}
           <section>
-            <p className="label-meta mb-6">Repositories</p>
+            <div className="flex items-center justify-between mb-6">
+              <p className="label-meta">Repositories</p>
+              <Link
+                to="/app/connect"
+                className="label-meta hover:text-foreground transition-colors underline"
+              >
+                + Add Repo
+              </Link>
+            </div>
             <div className="border-t border-border">
               {repos.map((repo, i) => (
-                <div key={repo.repoId} className="flex items-center gap-8 border-b border-border py-5">
+                <div key={repo.repoId} className="flex items-center gap-6 border-b border-border py-5 hover:bg-muted/20 transition-colors">
                   <span className="num-display w-8 shrink-0">
                     {String(i + 1).padStart(2, '0')}
                   </span>
+
+                  {/* Name + meta */}
                   <div className="flex-1 min-w-0">
                     <p className="font-medium truncate">
                       {repo.repoUrl.replace('https://github.com/', '').replace('https://dev.azure.com/', '')}
                     </p>
                     <p className="label-meta mt-0.5">{repo.platform} · added {formatDate(repo.createdAt)}</p>
                   </div>
+
+                  {/* Index status badge */}
+                  <IndexStatus indexedAt={repo.indexedAt} symbolCount={repo.symbolCount} />
+
+                  {/* View setup link */}
                   <Link
                     to={`/app/ready/${repo.repoId}`}
-                    className="label-meta hover:text-foreground transition-colors underline"
+                    className="label-meta hover:text-foreground transition-colors underline shrink-0 hidden sm:block"
                   >
-                    + VIEW SETUP
+                    Setup
                   </Link>
+
+                  {/* Reindex */}
+                  <button
+                    onClick={() => handleReindex(repo.repoId)}
+                    title="Reindex"
+                    className="p-1.5 text-muted-foreground hover:text-foreground transition-colors shrink-0"
+                  >
+                    <RefreshCw className="h-3.5 w-3.5" />
+                  </button>
+
+                  {/* Delete */}
+                  <button
+                    onClick={() => handleDelete(repo.repoId, repo.repoUrl)}
+                    title="Delete repo"
+                    className="p-1.5 text-muted-foreground hover:text-destructive transition-colors shrink-0"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
                 </div>
               ))}
             </div>
@@ -79,11 +130,10 @@ export default function Dashboard() {
             <p className="label-meta mb-6">Recent Reviews</p>
 
             {/* Header row */}
-            <div className="grid grid-cols-[2rem_1fr_6rem_6rem_5rem_8rem] gap-4 border-t border-b border-border py-2 items-center">
+            <div className="grid grid-cols-[2rem_1fr_6rem_5rem_8rem] gap-4 border-t border-b border-border py-2 items-center">
               <span className="label-meta">#</span>
               <span className="label-meta">Pull Request</span>
               <span className="label-meta text-right">Comments</span>
-              <span className="label-meta text-right">Risk</span>
               <span className="label-meta">Verdict</span>
               <span className="label-meta text-right">Date</span>
             </div>
@@ -92,7 +142,7 @@ export default function Dashboard() {
               reviews.map((r, i) => (
                 <div
                   key={r.id}
-                  className="grid grid-cols-[2rem_1fr_6rem_6rem_5rem_8rem] gap-4 border-b border-border py-4 items-center hover:bg-muted/20 transition-colors"
+                  className="grid grid-cols-[2rem_1fr_6rem_5rem_8rem] gap-4 border-b border-border py-4 items-center hover:bg-muted/20 transition-colors"
                 >
                   <span className="num-display">{String(i + 1).padStart(2, '0')}</span>
                   <div className="min-w-0">
@@ -101,11 +151,8 @@ export default function Dashboard() {
                     </p>
                   </div>
                   <span className="font-mono text-sm text-right">{r.commentCount}</span>
-                  <div className="text-right">
-                    <RiskBadge score={r.riskScore} />
-                  </div>
                   <span className={cn('label-meta', VERDICT_COLOR[r.verdict])}>
-                    {VERDICT_LABEL[r.verdict]}
+                    {VERDICT_LABEL[r.verdict] ?? r.verdict}
                   </span>
                   <span className="label-meta text-right">{formatDate(r.createdAt)}</span>
                 </div>
@@ -119,6 +166,21 @@ export default function Dashboard() {
         </div>
       )}
     </div>
+  )
+}
+
+function IndexStatus({ indexedAt, symbolCount }: { indexedAt: string | null; symbolCount: number }) {
+  if (indexedAt) {
+    return (
+      <span className="label-meta text-[#E85A1A] shrink-0 hidden md:block">
+        ✓ {symbolCount.toLocaleString()} symbols
+      </span>
+    )
+  }
+  return (
+    <span className="label-meta text-muted-foreground shrink-0 hidden md:block">
+      NOT INDEXED
+    </span>
   )
 }
 
@@ -159,15 +221,6 @@ function EmptyState() {
       </Link>
     </div>
   )
-}
-
-function RiskBadge({ score }: { score: number }) {
-  const color = score >= 70
-    ? 'text-[#E85A1A]'
-    : score >= 40
-      ? 'text-foreground'
-      : 'text-muted-foreground'
-  return <span className={cn('font-mono text-sm', color)}>{score}</span>
 }
 
 function formatDate(iso: string): string {

@@ -1,14 +1,31 @@
 import { useParams } from 'react-router-dom'
 import { Copy, CheckCircle } from 'lucide-react'
 import { useState } from 'react'
-import { Button } from '@/components/ui/button'
+import useSWR from 'swr'
 import { Badge } from '@/components/ui/badge'
+
+const fetcher = (url: string) => fetch(url, { credentials: 'include' }).then(r => r.json())
+
+interface Repo {
+  repoId: string
+  platform: 'github' | 'azure'
+}
 
 export default function Ready() {
   const { repoId } = useParams<{ repoId: string }>()
   const [copied, setCopied] = useState(false)
 
-  const webhookUrl = `${window.location.origin}/webhooks/github`
+  const { data: repos } = useSWR<Repo[]>('/api/repos', fetcher)
+  const repo = repos?.find(r => r.repoId === repoId)
+
+  const platform = repo?.platform ?? 'github'
+  const webhookPath = platform === 'azure' ? '/api/webhooks/azure' : '/api/webhooks/github'
+  const webhookUrl = `${window.location.origin}${webhookPath}`
+
+  const platformLabel = platform === 'azure' ? 'Azure DevOps' : 'GitHub'
+  const eventLabel = platform === 'azure'
+    ? 'git.push  +  git.pullrequest.created / updated'
+    : 'push  +  pull_request'
 
   function copyWebhook() {
     navigator.clipboard.writeText(webhookUrl)
@@ -56,9 +73,13 @@ export default function Ready() {
 
       {/* Webhook setup */}
       <section>
-        <p className="label-meta mb-4">Webhook Configuration</p>
+        <p className="label-meta mb-1">Webhook Configuration</p>
+        <p className="text-xs text-muted-foreground mb-6 font-mono uppercase tracking-widest">
+          {platformLabel}
+        </p>
         <p className="text-sm text-muted-foreground mb-6 font-mono">
-          Add this URL to your repository's webhook settings. Select <strong>push</strong> and <strong>pull_request</strong> events.
+          Add this URL to your repository's webhook settings.
+          Select <strong>{eventLabel}</strong> events.
         </p>
 
         <div className="flex items-stretch border border-border">
