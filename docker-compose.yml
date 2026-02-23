@@ -5,6 +5,9 @@ services:
       - "3000:3000"
     environment:
       DATABASE_URL: postgres://agnus:agnus@postgres:5432/agnus
+      ADMIN_EMAIL: ${ADMIN_EMAIL:-admin@example.com}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-changeme}
+      JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
       WEBHOOK_SECRET: ${WEBHOOK_SECRET}
       SESSION_SECRET: ${SESSION_SECRET}
       LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
@@ -18,6 +21,7 @@ services:
       GITHUB_TOKEN: ${GITHUB_TOKEN:-}
     volumes:
       - /tmp:/tmp:ro
+      - repos-data:/repos
     depends_on:
       postgres:
         condition: service_healthy
@@ -42,3 +46,4 @@ services:
 
 volumes:
   postgres-data:
+  repos-data:
