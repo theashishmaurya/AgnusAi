@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Check, Copy, CheckCircle } from 'lucide-react'
+import { Check, Copy, CheckCircle, AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -46,6 +46,11 @@ export default function Settings() {
   const [inviteUrl, setInviteUrl] = useState('')
   const [inviteCopied, setInviteCopied] = useState(false)
   const [inviteLoading, setInviteLoading] = useState(false)
+  // API key state
+  const [apiKeyPreview, setApiKeyPreview] = useState<string | null>(null)
+  const [newApiKey, setNewApiKey] = useState('')
+  const [apiKeyCopied, setApiKeyCopied] = useState(false)
+  const [apiKeyLoading, setApiKeyLoading] = useState(false)
 
   // Load saved depth on mount
   useEffect(() => {
@@ -54,6 +59,15 @@ export default function Settings() {
       .then(d => { if (d?.reviewDepth) setDepth(d.reviewDepth) })
       .catch(() => {})
   }, [])
+
+  // Load API key preview (admin only)
+  useEffect(() => {
+    if (user?.role !== 'admin') return
+    fetch('/api/auth/api-key', { credentials: 'include' })
+      .then(r => r.ok ? r.json() as Promise<{ exists: boolean; preview?: string }> : null)
+      .then(d => { if (d?.exists && d.preview) setApiKeyPreview(d.preview) })
+      .catch(() => {})
+  }, [user])
 
   async function save() {
     await fetch('/api/settings', {
@@ -86,6 +100,29 @@ export default function Settings() {
     navigator.clipboard.writeText(inviteUrl)
     setInviteCopied(true)
     setTimeout(() => setInviteCopied(false), 2000)
+  }
+
+  async function generateApiKey() {
+    setApiKeyLoading(true)
+    setNewApiKey('')
+    try {
+      const res = await fetch('/api/auth/api-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+      })
+      const d = await res.json() as { key: string }
+      setNewApiKey(d.key)
+      setApiKeyPreview(`${d.key.slice(0, 12)}...${d.key.slice(-4)}`)
+    } finally {
+      setApiKeyLoading(false)
+    }
+  }
+
+  function copyApiKey() {
+    navigator.clipboard.writeText(newApiKey)
+    setApiKeyCopied(true)
+    setTimeout(() => setApiKeyCopied(false), 2000)
   }
 
   return (
@@ -212,6 +249,64 @@ export default function Settings() {
                 </button>
               </div>
             )}
+          </div>
+
+          {/* API Key section */}
+          <div className="mt-12">
+            <p className="label-meta mb-4">CI/CD Access</p>
+            <h2 className="text-2xl font-bold tracking-tight text-foreground mb-8">
+              API Key.
+            </h2>
+
+            <div className="border-t border-border pt-6">
+              <p className="text-sm text-muted-foreground mb-2">
+                Use this key to trigger reviews from CI/CD pipelines via{' '}
+                <code className="font-mono text-xs bg-muted/40 px-1">Authorization: Bearer &lt;key&gt;</code>.
+              </p>
+
+              {apiKeyPreview && !newApiKey && (
+                <div className="flex items-center gap-3 mb-6 mt-4">
+                  <span className="label-meta">Current key:</span>
+                  <span className="font-mono text-sm text-muted-foreground">{apiKeyPreview}</span>
+                </div>
+              )}
+
+              {!apiKeyPreview && !newApiKey && (
+                <p className="text-sm text-muted-foreground mb-6 mt-4">No API key generated yet.</p>
+              )}
+
+              <Button
+                size="lg"
+                variant="outline"
+                onClick={generateApiKey}
+                disabled={apiKeyLoading}
+              >
+                {apiKeyLoading ? 'Generating...' : apiKeyPreview ? 'Regenerate API Key' : 'Generate API Key'}
+              </Button>
+
+              {newApiKey && (
+                <div className="mt-6">
+                  <div className="flex items-center gap-2 mb-2">
+                    <AlertTriangle className="h-3.5 w-3.5 text-[#E85A1A]" />
+                    <span className="label-meta text-[#E85A1A]">Copy this key now — it won't be shown again.</span>
+                  </div>
+                  <div className="flex items-stretch border border-[#E85A1A]">
+                    <div className="flex-1 px-4 py-3 font-mono text-sm overflow-x-auto whitespace-nowrap bg-muted/20">
+                      {newApiKey}
+                    </div>
+                    <button
+                      onClick={copyApiKey}
+                      className="flex items-center gap-2 px-4 border-l border-[#E85A1A] label-meta hover:bg-muted/30 transition-colors"
+                    >
+                      {apiKeyCopied
+                        ? <><CheckCircle className="h-3.5 w-3.5 text-[#E85A1A]" /> COPIED</>
+                        : <><Copy className="h-3.5 w-3.5" /> COPY</>
+                      }
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         </div>
       )}
