@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { SseProgressBar } from '@/components/SseProgressBar'
@@ -13,6 +13,8 @@ interface IndexStats {
 export default function Indexing() {
   const { repoId } = useParams<{ repoId: string }>()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
+  const branch = searchParams.get('branch') ?? 'main'
   const [stats, setStats] = useState<IndexStats | null>(null)
 
   if (!repoId) return null
@@ -30,7 +32,7 @@ export default function Indexing() {
         This only happens once — future indexing is incremental.
       </p>
 
-      <SseProgressBar repoId={repoId} onDone={setStats} />
+      <SseProgressBar repoId={repoId} branch={branch} onDone={setStats} />
 
       {stats && (
         <div className="mt-12 pt-8 border-t border-border">

@@ -3,18 +3,21 @@ import { Progress } from '@/components/ui/progress'
 import { cn } from '@/lib/utils'
 
 interface IndexStep {
-  step: 'parsing' | 'embedding' | 'done'
+  step: 'parsing' | 'embedding' | 'done' | 'error'
   file?: string
   progress?: number
   total?: number
   symbolCount?: number
   edgeCount?: number
   durationMs?: number
+  message?: string
 }
 
 interface Props {
   repoId: string
+  branch?: string
   onDone?: (stats: { symbolCount: number; edgeCount: number; durationMs: number }) => void
+  onError?: (message: string) => void
 }
 
 const STEPS = [
@@ -23,14 +26,15 @@ const STEPS = [
   { key: 'done', label: '03', title: 'Ready', desc: 'Graph loaded into memory' },
 ]
 
-export function SseProgressBar({ repoId, onDone }: Props) {
+export function SseProgressBar({ repoId, branch = 'main', onDone, onError }: Props) {
   const [current, setCurrent] = useState<IndexStep | null>(null)
   const [logs, setLogs] = useState<string[]>([])
   const [pct, setPct] = useState(0)
+  const [errorMsg, setErrorMsg] = useState<string | null>(null)
   const esRef = useRef<EventSource | null>(null)
 
   useEffect(() => {
-    const es = new EventSource(`/api/repos/${repoId}/index/status`)
+    const es = new EventSource(`/api/repos/${repoId}/index/status?branch=${encodeURIComponent(branch)}`)
     esRef.current = es
 
     es.onmessage = (e) => {
@@ -53,14 +57,34 @@ export function SseProgressBar({ repoId, onDone }: Props) {
           edgeCount: data.edgeCount ?? 0,
           durationMs: data.durationMs ?? 0,
         })
+      } else if (data.step === 'error') {
+        es.close()
+        const msg = data.message ?? 'Indexing failed'
+        setErrorMsg(msg)
+        onError?.(msg)
       }
     }
 
     es.onerror = () => es.close()
     return () => es.close()
-  }, [repoId])
+  }, [repoId, branch])
 
   const activeStep = current?.step ?? 'parsing'
+
+  if (errorMsg) {
+    return (
+      <div className="border border-destructive/40 bg-destructive/5 rounded-sm p-6 space-y-2">
+        <p className="label-meta text-destructive">Indexing Failed</p>
+        <p className="font-mono text-sm text-destructive">{errorMsg}</p>
+        <p className="text-sm text-muted-foreground mt-2">
+          Make sure <code className="font-mono text-xs bg-muted px-1 py-0.5 rounded">repoPath</code> is
+          the absolute path to a local clone of the repository that is accessible inside the container
+          (e.g. a path under <code className="font-mono text-xs bg-muted px-1 py-0.5 rounded">/tmp</code>
+          which is mounted from the host).
+        </p>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-8">

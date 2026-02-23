@@ -15,6 +15,7 @@ export default function Connect() {
     token: '',
     platform: 'github' as 'github' | 'azure',
     repoPath: '',
+    branchesInput: '',
   })
 
   async function handleSubmit(e: React.FormEvent) {
@@ -22,17 +23,22 @@ export default function Connect() {
     setLoading(true)
     setError('')
     try {
+      const branches = form.branchesInput
+        ? form.branchesInput.split(',').map(s => s.trim()).filter(Boolean)
+        : ['main']
+      const { branchesInput: _, ...rest } = form
       const res = await fetch('/api/repos', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        credentials: 'include',
+        body: JSON.stringify({ ...rest, branches }),
       })
       if (!res.ok) {
         const d = await res.json() as { error: string }
         throw new Error(d.error ?? 'Request failed')
       }
       const { repoId } = await res.json() as { repoId: string }
-      navigate(`/app/indexing/${repoId}`)
+      navigate(`/app/indexing/${repoId}?branch=${encodeURIComponent(branches[0])}`)
     } catch (err) {
       setError((err as Error).message)
     } finally {
@@ -105,18 +111,32 @@ export default function Connect() {
             value={form.token}
             onChange={e => setForm(f => ({ ...f, token: e.target.value }))}
           />
-          <p className="label-meta">Required to post review comments. Stored encrypted.</p>
+          <p className="label-meta">Required to post review comments to PRs.</p>
         </div>
 
         <div className="space-y-2">
-          <Label htmlFor="repoPath">Local path (optional)</Label>
+          <Label htmlFor="branches">Branches</Label>
+          <Input
+            id="branches"
+            placeholder="main, develop"
+            value={form.branchesInput}
+            onChange={e => setForm(f => ({ ...f, branchesInput: e.target.value }))}
+          />
+          <p className="label-meta">Comma-separated. Defaults to <code className="font-mono">main</code>.</p>
+        </div>
+
+        <div className="space-y-2">
+          <Label htmlFor="repoPath">Local Path <span className="label-meta">(optional)</span></Label>
           <Input
             id="repoPath"
-            placeholder="/home/runner/work/repo"
+            placeholder="/repos/my-repo  or leave blank to auto-clone"
             value={form.repoPath}
             onChange={e => setForm(f => ({ ...f, repoPath: e.target.value }))}
           />
-          <p className="label-meta">Absolute path on the server for full indexing. Leave blank to skip.</p>
+          <p className="label-meta">
+            Leave blank — AgnusAI will clone the repo automatically using the token above.
+            Provide a path only if you have a pre-existing local clone.
+          </p>
         </div>
 
         {error && (
