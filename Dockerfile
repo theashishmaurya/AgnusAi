@@ -29,6 +29,7 @@ COPY packages/dashboard/tsconfig.json ./packages/dashboard/
 COPY packages/shared/src               ./packages/shared/src
 COPY packages/reviewer/src             ./packages/reviewer/src
 COPY packages/reviewer/skills          ./packages/reviewer/skills
+COPY packages/reviewer/tsup.config.ts  ./packages/reviewer/tsup.config.ts
 COPY packages/core/src                 ./packages/core/src
 COPY packages/api/src                  ./packages/api/src
 COPY packages/dashboard/src            ./packages/dashboard/src

@@ -10,6 +10,7 @@ services:
       JWT_SECRET: ${JWT_SECRET:-change-me-in-production}
       WEBHOOK_SECRET: ${WEBHOOK_SECRET}
       SESSION_SECRET: ${SESSION_SECRET}
+      API_KEY: ${API_KEY:-}
       LLM_PROVIDER: ${LLM_PROVIDER:-ollama}
       LLM_BASE_URL: ${LLM_BASE_URL:-http://host.docker.internal:11434/v1}
       LLM_API_KEY: ${LLM_API_KEY:-}
