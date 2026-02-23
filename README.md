@@ -392,7 +392,8 @@ jobs:
           npx @agnus-ai/reviewer review \
             --pr ${{ github.event.pull_request.number }} \
             --repo ${{ github.repository }} \
-            --provider claude
+            --provider claude \
+            --incremental
 ```
 
 **Azure Pipelines:**
@@ -489,6 +490,76 @@ pnpm --filter @agnus-ai/docs dev
 ```
 
 ---
+
+### P3: Multi-language LSP + Impact Analysis
+
+| Language | LSP Server |
+|----------|------------|
+| TypeScript | `ts.createProgram()` |
+| Python | Pyright / Pylance |
+| Go | gopls |
+| Rust | rust-analyzer |
+| Java | jdtls |
+
+**Impact Analysis:**
+- Find all dependents of changed functions/classes
+- Detect breaking API changes
+- Suggest related files that may need updates
+- Generate call graphs for affected code paths
+
+---
+
+## Architecture Overview (v2 Target)
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         GitHub Webhook                              │
+│                   (PR events, comment replies)                      │
+└─────────────────────────────────────────────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                        PR Event Handler                             │
+│              • Incremental Diff Analyzer                            │
+│              • Comment Manager (post/reply/resolve)                 │
+└─────────────────────────────────────────────────────────────────────┘
+                               │
+          ┌────────────────────┼────────────────────┐
+          ▼                    ▼                    ▼
+┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
+│   LSP Manager    │  │  Context Builder  │  │    Vector DB     │
+│  (P2/P3)         │  │                   │  │    (Qdrant)      │
+│                  │  │ • Diff context    │  │                  │
+│ • TypeScript     │  │ • Type info       │  │ • Embeddings     │
+│ • Python (P3)    │  │ • Similar code    │  │ • Metadata       │
+│ • Go (P3)        │  │ • Thread history  │  │ • Similarity     │
+│ • Rust (P3)      │  │                   │  │   queries        │
+└──────────────────┘  └──────────────────┘  └──────────────────┘
+          │                    │                    │
+          └────────────────────┼────────────────────┘
+                               ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                        LLM Backend (Vercel AI SDK)                  │
+│              Ollama • Claude • OpenAI • Azure • Custom              │
+└─────────────────────────────────────────────────────────────────────┘
+                               │
+                               ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                        Comment Manager                              │
+│              • Post inline comments                                 │
+│              • Reply to threads                                     │
+│              • Resolve stale comments                               │
+│              • Update checkpoint                                    │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+**Want to contribute?** Check [CONTRIBUTING.md](./CONTRIBUTING.md) or pick up an issue from the roadmap!
+
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## License
 
