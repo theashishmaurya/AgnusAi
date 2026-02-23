@@ -603,6 +603,21 @@ async function main() {
       review_depth TEXT NOT NULL DEFAULT 'standard'
     )
   `)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS system_api_keys (
+      id INT PRIMARY KEY DEFAULT 1,
+      api_key TEXT NOT NULL,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      CONSTRAINT single_row CHECK (id = 1)
+    )
+  `)
+  // Seed API key from env var if one is set and no key exists yet
+  if (process.env.API_KEY) {
+    await pool.query(
+      `INSERT INTO system_api_keys (id, api_key) VALUES (1, $1) ON CONFLICT DO NOTHING`,
+      [process.env.API_KEY],
+    )
+  }
   app.log.info('Database schema migrated')
   await seedAdminUser(pool)
 

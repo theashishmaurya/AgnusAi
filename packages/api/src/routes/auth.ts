@@ -75,6 +75,36 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
   })
 
   /**
+   * GET /api/auth/api-key — return masked preview of current API key (admin only)
+   */
+  app.get('/api/auth/api-key', { preHandler: [requireAdmin] }, async (_req, reply) => {
+    const { rows } = await pool.query<{ api_key: string; created_at: string }>(
+      'SELECT api_key, created_at FROM system_api_keys WHERE id = 1',
+    )
+    if (!rows[0]) return reply.send({ exists: false })
+    const key = rows[0].api_key
+    return reply.send({
+      exists: true,
+      preview: `${key.slice(0, 12)}...${key.slice(-4)}`,
+      createdAt: rows[0].created_at,
+    })
+  })
+
+  /**
+   * POST /api/auth/api-key — generate (or regenerate) API key (admin only)
+   * Returns the full key once — store it immediately.
+   */
+  app.post('/api/auth/api-key', { preHandler: [requireAdmin] }, async (_req, reply) => {
+    const key = `agnus_${crypto.randomBytes(32).toString('hex')}`
+    await pool.query(
+      `INSERT INTO system_api_keys (id, api_key) VALUES (1, $1)
+       ON CONFLICT (id) DO UPDATE SET api_key = EXCLUDED.api_key, created_at = NOW()`,
+      [key],
+    )
+    return reply.send({ key })
+  })
+
+  /**
    * POST /api/auth/register — use invite token to create account
    */
   app.post('/api/auth/register', async (req, reply) => {
