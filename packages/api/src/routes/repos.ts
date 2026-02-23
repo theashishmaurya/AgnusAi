@@ -9,20 +9,23 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
   const pool: Pool = app.db
 
   /**
-   * POST /api/repos — register a repo and trigger async full index
-   * Body: { repoUrl, platform, token, repoPath }
+   * POST /api/repos — register a repo and trigger async full index per branch
+   * Body: { repoUrl, platform, token, repoPath, branches? }
    */
   app.post('/api/repos', async (req, reply) => {
-    const { repoUrl, platform, token, repoPath } = req.body as {
+    const { repoUrl, platform, token, repoPath, branches } = req.body as {
       repoUrl: string
       platform: 'github' | 'azure'
       token?: string
       repoPath?: string
+      branches?: string[]
     }
 
     if (!repoUrl || !platform) {
       return reply.status(400).send({ error: 'repoUrl and platform are required' })
     }
+
+    const indexBranches = (branches && branches.length > 0) ? branches : ['main']
 
     // Derive a stable repoId from the URL
     const repoId = Buffer.from(repoUrl).toString('base64url').slice(0, 32)
@@ -45,37 +48,61 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
       [repoId, repoUrl, platform, token ?? null, repoPath ?? null],
     )
 
-    // Trigger full index in background (no await — we'll track via SSE)
+    // Ensure repo_branches table exists and insert branch registrations
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS repo_branches (
+        repo_id TEXT NOT NULL REFERENCES repos(repo_id) ON DELETE CASCADE,
+        branch TEXT NOT NULL,
+        PRIMARY KEY (repo_id, branch)
+      )
+    `)
+    for (const branch of indexBranches) {
+      await pool.query(
+        `INSERT INTO repo_branches (repo_id, branch) VALUES ($1, $2) ON CONFLICT DO NOTHING`,
+        [repoId, branch],
+      )
+    }
+
+    // Trigger full index in background per branch (parallel)
     setImmediate(async () => {
       try {
         const embeddingAdapter = createEmbeddingAdapter(pool)
         const storage = new PostgresStorageAdapter(pool)
         await storage.migrate(embeddingAdapter?.dim ?? 1024)
-        const graph = new InMemorySymbolGraph()
-        const registry = await createDefaultRegistry()
-        const indexer = new Indexer(registry, graph, storage, embeddingAdapter)
-        const path = repoPath ?? repoUrl.split('/').pop() ?? repoId
+        const repoLocalPath = repoPath ?? repoUrl.split('/').pop() ?? repoId
 
-        await indexer.fullIndex(path, repoId, (progress) => {
-          // Store latest progress so SSE route can read it
-          setProgress(repoId, progress)
-        })
+        await Promise.all(indexBranches.map(async (branch) => {
+          const graph = new InMemorySymbolGraph()
+          const registry = await createDefaultRegistry()
+          const indexer = new Indexer(registry, graph, storage, embeddingAdapter)
 
-        await loadRepo(repoId)
-        setProgress(repoId, null) // done
+          await indexer.fullIndex(repoLocalPath, repoId, branch, (progress) => {
+            setProgress(`${repoId}:${branch}`, progress)
+          })
+
+          await loadRepo(repoId, branch)
+          setProgress(`${repoId}:${branch}`, null) // done
+        }))
       } catch (err) {
         console.error(`[repos] Full index failed for ${repoId}:`, (err as Error).message)
       }
     })
 
-    return reply.status(202).send({ repoId, message: 'Indexing started — stream progress at /api/repos/' + repoId + '/index/status' })
+    return reply.status(202).send({
+      repoId,
+      branches: indexBranches,
+      message: `Indexing started for ${indexBranches.length} branch(es) — stream progress at /api/repos/${repoId}/index/status?branch=<branch>`,
+    })
   })
 
   /**
    * GET /api/repos/:id/index/status — SSE stream of indexing progress
+   * Query: ?branch=develop  (defaults to 'main')
    */
   app.get('/api/repos/:id/index/status', async (req, reply) => {
     const { id: repoId } = req.params as { id: string }
+    const { branch = 'main' } = req.query as { branch?: string }
+    const progressKey = `${repoId}:${branch}`
 
     reply.raw.setHeader('Content-Type', 'text/event-stream')
     reply.raw.setHeader('Cache-Control', 'no-cache')
@@ -89,7 +116,7 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
     // Poll progress every 500ms until done or connection closes
     let done = false
     const interval = setInterval(() => {
-      const progress = getProgress(repoId)
+      const progress = getProgress(progressKey)
       if (progress) {
         send(progress)
         if (progress.step === 'done') {
@@ -117,32 +144,35 @@ export async function repoRoutes(app: FastifyInstance): Promise<void> {
 
   /**
    * GET /api/repos/:id/graph/blast-radius/:symbolId
+   * Query: ?branch=develop  (defaults to 'main')
    */
   app.get('/api/repos/:id/graph/blast-radius/:symbolId', async (req, reply) => {
     const { id: repoId, symbolId } = req.params as { id: string; symbolId: string }
-    const entry = await getOrLoadRepo(repoId)
+    const { branch = 'main' } = req.query as { branch?: string }
+    const entry = await getOrLoadRepo(repoId, branch)
     const br = entry.graph.getBlastRadius([decodeURIComponent(symbolId)])
     return reply.send(br)
   })
 
   /**
-   * DELETE /api/repos/:id
+   * DELETE /api/repos/:id — evict all branches from cache and remove from DB
    */
   app.delete('/api/repos/:id', async (req, reply) => {
     const { id: repoId } = req.params as { id: string }
     await pool.query('DELETE FROM repos WHERE repo_id = $1', [repoId])
-    evictRepo(repoId)
+    evictRepo(repoId) // evicts all branches (no branch arg = evict all)
     return reply.status(204).send()
   })
 }
 
 // ----- Simple in-process progress store -----
+// Key format: `${repoId}:${branch}`
 const progressStore = new Map<string, IndexProgress | null>()
 
-function setProgress(repoId: string, progress: IndexProgress | null): void {
-  progressStore.set(repoId, progress)
+function setProgress(key: string, progress: IndexProgress | null): void {
+  progressStore.set(key, progress)
 }
 
-function getProgress(repoId: string): IndexProgress | null | undefined {
-  return progressStore.get(repoId)
+function getProgress(key: string): IndexProgress | null | undefined {
+  return progressStore.get(key)
 }
