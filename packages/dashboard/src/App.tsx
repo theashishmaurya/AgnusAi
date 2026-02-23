@@ -1,5 +1,6 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { Layout } from '@/components/Layout'
+import Landing from '@/pages/Landing'
 import Dashboard from '@/pages/Dashboard'
 import Connect from '@/pages/Connect'
 import Indexing from '@/pages/Indexing'
@@ -30,7 +31,7 @@ export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        <Route path="/" element={<Navigate to="/app" replace />} />
+        <Route path="/" element={<Landing />} />
         <Route path="/login" element={<Login />} />
         <Route
           path="/app"
