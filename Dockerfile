@@ -75,7 +75,7 @@ WORKDIR /app
 # API bundle
 COPY --from=builder /deploy .
 
-# Dashboard static build — served by Fastify at /app/*
+# Dashboard static build — served by Fastify SPA wildcard at /*
 COPY --from=builder /dashboard-dist ./dashboard-dist
 
 # Docs static build — served by Fastify at /docs/*
