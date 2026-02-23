@@ -33,9 +33,12 @@ export class Indexer {
   async fullIndex(
     repoPath: string,
     repoId: string,
+    branch: string,
     onProgress?: (p: IndexProgress) => void,
   ): Promise<IndexStats> {
     const start = Date.now()
+    // Clear stale symbols/edges from a previous full-index run before re-indexing
+    await this.storage.deleteAllForBranch(repoId, branch)
     const files = await collectFiles(repoPath)
     let symbolCount = 0
     let edgeCount = 0
@@ -58,8 +61,8 @@ export class Indexer {
 
         // Persist — attach repoId to edges for storage
         const edgesWithRepo = result.edges.map(e => ({ ...e, repoId }))
-        await this.storage.saveSymbols(result.symbols)
-        await this.storage.saveEdges(edgesWithRepo)
+        await this.storage.saveSymbols(result.symbols, branch)
+        await this.storage.saveEdges(edgesWithRepo, branch)
 
         symbolCount += result.symbols.length
         edgeCount += result.edges.length
@@ -69,7 +72,7 @@ export class Indexer {
     }
 
     const snapshot = this.graph.serialize()
-    await this.storage.saveGraphSnapshot(repoId, snapshot)
+    await this.storage.saveGraphSnapshot(repoId, branch, snapshot)
 
     // Embed all symbols if an embedding adapter is configured
     if (this.embeddings) {
@@ -94,10 +97,10 @@ export class Indexer {
    * Re-index only the changed files.
    * Removes old symbols/edges for each file before re-parsing.
    */
-  async incrementalUpdate(changedFiles: string[], repoId: string): Promise<void> {
+  async incrementalUpdate(changedFiles: string[], repoId: string, branch: string): Promise<void> {
     for (const relPath of changedFiles) {
       this.graph.removeFile(relPath)
-      await this.storage.deleteByFile(relPath, repoId)
+      await this.storage.deleteByFile(relPath, repoId, branch)
 
       try {
         // We need the absolute path — callers pass relative paths so we need repoPath
@@ -110,8 +113,8 @@ export class Indexer {
         result.edges.forEach(e => this.graph.addEdge(e))
 
         const edgesWithRepo = result.edges.map(e => ({ ...e, repoId }))
-        await this.storage.saveSymbols(result.symbols)
-        await this.storage.saveEdges(edgesWithRepo)
+        await this.storage.saveSymbols(result.symbols, branch)
+        await this.storage.saveEdges(edgesWithRepo, branch)
 
         if (this.embeddings && result.symbols.length > 0) {
           await this.embedBatch(result.symbols, repoId)
@@ -122,7 +125,7 @@ export class Indexer {
     }
 
     const snapshot = this.graph.serialize()
-    await this.storage.saveGraphSnapshot(repoId, snapshot)
+    await this.storage.saveGraphSnapshot(repoId, branch, snapshot)
   }
 
   /**
@@ -156,8 +159,8 @@ export class Indexer {
    * Load persisted symbols/edges from storage and rebuild the in-memory graph.
    * Call on startup to avoid re-indexing.
    */
-  async loadFromStorage(repoId: string): Promise<void> {
-    const snapshot = await this.storage.loadGraphSnapshot(repoId)
+  async loadFromStorage(repoId: string, branch: string): Promise<void> {
+    const snapshot = await this.storage.loadGraphSnapshot(repoId, branch)
     if (snapshot) {
       // Rebuild from snapshot (faster than row-by-row)
       const { InMemorySymbolGraph } = await import('../graph/InMemorySymbolGraph')
@@ -169,7 +172,7 @@ export class Indexer {
     }
 
     // Fallback: load from rows
-    const { symbols, edges } = await this.storage.loadAll(repoId)
+    const { symbols, edges } = await this.storage.loadAll(repoId, branch)
     for (const s of symbols) this.graph.addSymbol(s)
     for (const e of edges) this.graph.addEdge(e)
   }
