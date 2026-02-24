@@ -69,7 +69,10 @@ export class Retriever {
       const embeddings = await this.embeddings.embed(texts)
       // Average the embeddings for multi-symbol queries
       const queryVector = averageVectors(embeddings)
-      const results = await this.embeddings.search(queryVector, repoId, topK)
+      // Fetch 3× topK candidates so the knownIds filter + re-ranking has enough
+      // material to fill the final topK slots. Without this, filtering BFS-known
+      // symbols from a topK-sized result set often leaves fewer than topK neighbors.
+      const results = await this.embeddings.search(queryVector, repoId, topK * 3)
 
       // Re-rank: combine embedding similarity with inverse graph distance
       // score from search is already cosine similarity (higher = more similar)
