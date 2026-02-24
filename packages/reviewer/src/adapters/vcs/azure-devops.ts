@@ -32,6 +32,8 @@ export class AzureDevOpsAdapter implements VCSAdapter {
   private repository: string;
   private token: string;
   private baseUrl: string;
+  /** When true, getDiff compares latest iteration vs previous iteration (webhook re-push mode) */
+  incrementalFromPreviousIteration = false;
 
   constructor(config: AzureDevOpsConfig) {
     this.organization = config.organization;
@@ -117,15 +119,22 @@ export class AzureDevOpsAdapter implements VCSAdapter {
       }>
     };
 
+    const first = iterations.value[0];
     const latest = iterations.value[iterations.value.length - 1];
     const sourceCommit = latest?.sourceRefCommit?.commitId ?? '';
-    // commonRefCommit is the merge base — best "before" snapshot
-    const targetCommit = latest?.commonRefCommit?.commitId
-      ?? latest?.targetRefCommit?.commitId
+    // Use iteration 1's commonRefCommit as the merge base — stays stable across pushes
+    const targetCommit = first?.commonRefCommit?.commitId
+      ?? first?.targetRefCommit?.commitId
+      ?? latest?.commonRefCommit?.commitId
       ?? '';
 
+    // compareTo=0: full cumulative diff (PR created / manual trigger)
+    // compareTo=latest.id-1: only the new commits since the previous push
+    const compareTo = this.incrementalFromPreviousIteration && latest.id > 1
+      ? latest.id - 1
+      : 0;
     const changesUrl = this.getGitApiUrl(
-      `/repositories/${this.repository}/pullrequests/${prId}/iterations/${latest.id}/changes?api-version=7.0`
+      `/repositories/${this.repository}/pullrequests/${prId}/iterations/${latest.id}/changes?$compareTo=${compareTo}&api-version=7.0`
     );
 
     const changesResponse = await fetch(changesUrl, { headers: this.getAuthHeaders() });

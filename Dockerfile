@@ -33,6 +33,7 @@ COPY packages/reviewer/tsup.config.ts  ./packages/reviewer/tsup.config.ts
 COPY packages/core/src                 ./packages/core/src
 COPY packages/api/src                  ./packages/api/src
 COPY packages/dashboard/src            ./packages/dashboard/src
+COPY packages/dashboard/public/        ./packages/dashboard/public/
 COPY packages/dashboard/index.html     ./packages/dashboard/index.html
 COPY packages/dashboard/vite.config.ts ./packages/dashboard/vite.config.ts
 COPY packages/dashboard/tailwind.config.js ./packages/dashboard/tailwind.config.js
@@ -41,6 +42,7 @@ COPY packages/dashboard/postcss.config.js  ./packages/dashboard/postcss.config.j
 # Copy VitePress docs source (content dirs + config; node_modules/dist excluded by .dockerignore)
 COPY packages/docs/.vitepress/config.ts  ./packages/docs/.vitepress/config.ts
 COPY packages/docs/.vitepress/theme/     ./packages/docs/.vitepress/theme/
+COPY packages/docs/public/               ./packages/docs/public/
 COPY packages/docs/api/                  ./packages/docs/api/
 COPY packages/docs/architecture/         ./packages/docs/architecture/
 COPY packages/docs/development/          ./packages/docs/development/

@@ -8,7 +8,7 @@ export default defineConfig({
   base: '/docs/',
 
   head: [
-    ['link', { rel: 'icon', href: '/docs/favicon.ico' }],
+    ['link', { rel: 'icon', type: 'image/svg+xml', href: '/docs/favicon.svg' }],
   ],
 
   themeConfig: {
@@ -78,6 +78,7 @@ export default defineConfig({
         text: 'Features',
         items: [
           { text: 'Incremental Reviews', link: '/reference/incremental' },
+          { text: 'Precision Filter', link: '/guide/review-modes#precision-filter' },
           { text: 'Smart Deduplication', link: '/reference/deduplication' },
           { text: 'Skills System', link: '/reference/skills' },
           { text: 'Comment Threads', link: '/reference/comment-threads' },
