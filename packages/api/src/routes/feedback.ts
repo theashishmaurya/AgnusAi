@@ -58,6 +58,7 @@ export async function feedbackRoutes(app: FastifyInstance): Promise<void> {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>AgnusAI — Feedback received</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231C1C1A'/%3E%3Cpolyline points='7,11 13,16 7,21' fill='none' stroke='%23E85A1A' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Crect x='15' y='19' width='10' height='3' rx='1' fill='%23E85A1A'/%3E%3C/svg%3E" />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />
