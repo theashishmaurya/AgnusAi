@@ -7,7 +7,8 @@ const TICKER_ITEMS = [
   'Graph-Aware Review', 'Tree-Sitter Parsing', 'Postgres + pgvector',
   'Blast Radius Analysis', 'Webhook Triggered', '100% Self-Hosted',
   'Open Source', 'Incremental Indexing', 'TypeScript · Python · Java · C#',
-  'Ollama · OpenAI · Claude · Azure',
+  'Ollama · OpenAI · Claude · Azure', 'Precision Filter', 'RAG Feedback Loop',
+  'Azure DevOps + GitHub', 'Confidence Scoring', 'Team-Specific Learning',
 ]
 
 export default function Landing() {
@@ -150,15 +151,19 @@ function DiffComparison() {
             <div className="diff-line dl-del"><span className="sign">–</span><span>re-reviews unchanged code on every push</span></div>
             <div className="diff-line dl-del"><span className="sign">–</span><span>misses breaking changes in downstream callers</span></div>
             <div className="diff-line dl-del"><span className="sign">–</span><span>no semantic awareness of similar patterns</span></div>
+            <div className="diff-line dl-del"><span className="sign">–</span><span>noisy low-confidence speculative comments</span></div>
+            <div className="diff-line dl-del"><span className="sign">–</span><span>fixed review style — doesn't learn your team</span></div>
             <div className="diff-line dl-del"><span className="sign">–</span><span>code sent to third-party cloud API</span></div>
             <div className="diff-line dl-del"><span className="sign">–</span><span>locked to one LLM provider</span></div>
           </div>
           <div className="diff-col">
             <div className="diff-col-hdr">agnus-ai-review.ts</div>
             <div className="diff-line dl-add"><span className="sign">+</span><span>2-hop BFS surfaces callers, callees, blast radius</span></div>
-            <div className="diff-line dl-add"><span className="sign">+</span><span>incremental indexing — only re-parses changed files</span></div>
+            <div className="diff-line dl-add"><span className="sign">+</span><span>incremental — only re-reviews new commits (GitHub + Azure)</span></div>
             <div className="diff-line dl-add"><span className="sign">+</span><span>flags affected downstream functions before merge</span></div>
             <div className="diff-line dl-add"><span className="sign">+</span><span>deep mode: pgvector semantic neighbour lookup</span></div>
+            <div className="diff-line dl-add"><span className="sign">+</span><span>precision filter drops comments below confidence threshold</span></div>
+            <div className="diff-line dl-add"><span className="sign">+</span><span>RAG loop learns from your team's 👍-rated comments</span></div>
             <div className="diff-line dl-add"><span className="sign">+</span><span>100% self-hosted — one docker compose up</span></div>
             <div className="diff-line dl-add"><span className="sign">+</span><span>Ollama · OpenAI · Claude · Azure — your choice</span></div>
           </div>
@@ -208,6 +213,18 @@ function FeaturesGrid() {
           <div className="feat-title">Self-hostable, MIT</div>
           <div className="feat-desc">One <code>docker compose up</code>. Postgres, pgvector, and Ollama included. Your code never leaves your infrastructure.</div>
           <span className="feat-tag">MIT License</span>
+        </div>
+        <div className="feat-card">
+          <div className="feat-icon">🎯</div>
+          <div className="feat-title">Precision Filter</div>
+          <div className="feat-desc">The LLM self-scores every comment with <code>[Confidence: X.X]</code>. Anything below the threshold is silently dropped — only high-signal findings reach your PR.</div>
+          <span className="feat-tag">Signal / Noise</span>
+        </div>
+        <div className="feat-card">
+          <div className="feat-icon">🔁</div>
+          <div className="feat-title">Feedback Learning Loop</div>
+          <div className="feat-desc">Every 👍 on a review comment is embedded and stored. Future reviews inject the top-5 team-approved examples into the prompt — the more you rate, the more on-point reviews become.</div>
+          <span className="feat-tag">RAG · Per-repo</span>
         </div>
       </div>
     </div>
