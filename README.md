@@ -92,6 +92,8 @@ EMBEDDING_MODEL=qwen3-embedding:0.6b
 
 # Review depth: fast | standard | deep
 REVIEW_DEPTH=standard
+PRECISION_THRESHOLD=0.7
+MAX_DIFF_SIZE=150000
 ```
 
 ### 2. Start with Docker Compose
@@ -445,6 +447,7 @@ steps:
 | `POST` | `/api/repos` | ✓ | Register repo + trigger full index |
 | `GET` | `/api/repos/:id/index/status` | — | SSE indexing progress stream |
 | `GET` | `/api/repos/:id/graph/blast-radius/:symbolId` | — | Blast radius for a symbol |
+| `POST` | `/api/repos/:id/review` | ✓ | Manually trigger a review for a PR (supports `dryRun: true`) |
 | `DELETE` | `/api/repos/:id` | ✓ | Deregister repo |
 | `GET` | `/api/reviews` | ✓ | Last 50 reviews |
 | `GET` | `/api/settings` | ✓ | Review depth preference |
@@ -453,6 +456,20 @@ steps:
 | `POST` | `/api/webhooks/azure` | HMAC | Azure DevOps webhook receiver |
 | `GET` | `/app/*` | — | Dashboard (Vite React SPA) |
 | `GET` | `/docs/*` | — | Documentation (VitePress) |
+
+---
+
+### Dry-run Reviews
+
+Trigger the full review pipeline (graph context, RAG, precision filter) without posting comments:
+
+```bash
+curl -b /tmp/agnus.txt -X POST http://localhost:3000/api/repos/<repoId>/review \
+  -H 'Content-Type: application/json' \
+  -d '{"prNumber": 123, "dryRun": true}' | jq '{verdict, commentCount, comments}'
+```
+
+The response includes `comments[]` with each comment's `path`, `line`, `severity`, `confidence`, and `body`. Nothing is written to the DB or posted to GitHub/Azure.
 
 ---
 
@@ -487,70 +504,6 @@ To build and preview docs locally:
 ```bash
 pnpm --filter @agnus-ai/docs dev
 # → http://localhost:5173/docs/
-```
-
----
-
-### P3: Multi-language LSP + Impact Analysis
-
-| Language | LSP Server |
-|----------|------------|
-| TypeScript | `ts.createProgram()` |
-| Python | Pyright / Pylance |
-| Go | gopls |
-| Rust | rust-analyzer |
-| Java | jdtls |
-
-**Impact Analysis:**
-- Find all dependents of changed functions/classes
-- Detect breaking API changes
-- Suggest related files that may need updates
-- Generate call graphs for affected code paths
-
----
-
-## Architecture Overview (v2 Target)
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         GitHub Webhook                              │
-│                   (PR events, comment replies)                      │
-└─────────────────────────────────────────────────────────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                        PR Event Handler                             │
-│              • Incremental Diff Analyzer                            │
-│              • Comment Manager (post/reply/resolve)                 │
-└─────────────────────────────────────────────────────────────────────┘
-                               │
-          ┌────────────────────┼────────────────────┐
-          ▼                    ▼                    ▼
-┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
-│   LSP Manager    │  │  Context Builder  │  │    Vector DB     │
-│  (P2/P3)         │  │                   │  │    (Qdrant)      │
-│                  │  │ • Diff context    │  │                  │
-│ • TypeScript     │  │ • Type info       │  │ • Embeddings     │
-│ • Python (P3)    │  │ • Similar code    │  │ • Metadata       │
-│ • Go (P3)        │  │ • Thread history  │  │ • Similarity     │
-│ • Rust (P3)      │  │                   │  │   queries        │
-└──────────────────┘  └──────────────────┘  └──────────────────┘
-          │                    │                    │
-          └────────────────────┼────────────────────┘
-                               ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                        LLM Backend (Vercel AI SDK)                  │
-│              Ollama • Claude • OpenAI • Azure • Custom              │
-└─────────────────────────────────────────────────────────────────────┘
-                               │
-                               ▼
-┌─────────────────────────────────────────────────────────────────────┐
-│                        Comment Manager                              │
-│              • Post inline comments                                 │
-│              • Reply to threads                                     │
-│              • Resolve stale comments                               │
-│              • Update checkpoint                                    │
-└─────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
