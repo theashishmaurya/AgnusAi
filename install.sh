@@ -121,20 +121,30 @@ check_docker() {
         fi
     fi
 
-    # Wait up to 30s for the daemon to be ready (handles post-install startup lag)
+    # Wait up to 30s for the daemon to be ready (handles post-install startup lag).
+    # Use sudo as fallback — on fresh installs the user isn't in the docker group yet.
     local retries=0
-    while ! docker info &>/dev/null; do
+    while ! docker info &>/dev/null && ! sudo docker info &>/dev/null; do
         if [[ $retries -ge 6 ]]; then
             log_error "Docker daemon did not start in time."
-            log_info "Try starting it manually, then re-run this script:"
-            log_info "  sudo systemctl start docker   # Linux"
-            log_info "  open -a Docker                # macOS"
+            log_info "Start it manually and re-run this script:"
+            log_info "  sudo systemctl start docker"
             exit 1
         fi
         log_info "Waiting for Docker daemon... (${retries}/6)"
         sleep 5
         retries=$((retries + 1))
     done
+
+    # If docker only works with sudo, set up a sudo wrapper for compose calls
+    if ! docker info &>/dev/null && sudo docker info &>/dev/null; then
+        log_warning "Docker requires sudo (you're not in the docker group yet)."
+        log_info "This session will use 'sudo docker'. To fix permanently, log out and back in."
+        # Alias for the rest of this script
+        docker() { sudo docker "$@"; }
+        export -f docker 2>/dev/null || true
+    fi
+
     log_success "Docker is running"
 }
 
