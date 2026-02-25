@@ -180,30 +180,15 @@ describe('Dry-run review — PR #51 (requires GITHUB_TOKEN + LLM)', () => {
         expect('confidence' in c).toBe(true)
       }
 
-      // At least some comments should have a confidence value
+      // All confidence values must be in valid range
       const withConfidence = body.comments.filter((c: any) => c.confidence !== null && c.confidence !== undefined)
       console.log(`  ${withConfidence.length}/${body.comments.length} comments have confidence score`)
-    }
-  }, 180000) // LLM call can be slow on large models
-
-  it('Confidence values are in 0.0–1.0 range when present', async () => {
-    if (skip) return
-
-    const res = await post(`/api/repos/${repoId}/review`, {
-      prNumber: TARGET_PR,
-      dryRun: true,
-    }, cookie)
-
-    const body = await res.json() as any
-    if (!body.comments) return
-
-    for (const c of body.comments) {
-      if (c.confidence !== null && c.confidence !== undefined) {
+      for (const c of withConfidence) {
         expect(c.confidence).toBeGreaterThanOrEqual(0.0)
         expect(c.confidence).toBeLessThanOrEqual(1.0)
       }
     }
-  }, 120000)
+  }, 180000) // LLM call can be slow on large models
 })
 
 describe('Feedback endpoint', () => {
