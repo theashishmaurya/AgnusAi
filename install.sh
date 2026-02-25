@@ -99,6 +99,7 @@ check_docker() {
                 sudo apt-get update -y
                 sudo apt-get install -y docker-ce docker-ce-cli containerd.io \
                     docker-buildx-plugin docker-compose-plugin
+                sudo systemctl enable docker
                 sudo systemctl start docker
                 sudo usermod -aG docker "$USER" || true
             elif command -v yum &>/dev/null; then
@@ -107,6 +108,7 @@ check_docker() {
                     https://download.docker.com/linux/centos/docker-ce.repo
                 sudo yum install -y docker-ce docker-ce-cli containerd.io \
                     docker-buildx-plugin docker-compose-plugin
+                sudo systemctl enable docker
                 sudo systemctl start docker
                 sudo usermod -aG docker "$USER" || true
             else
@@ -119,10 +121,20 @@ check_docker() {
         fi
     fi
 
-    if ! docker info &>/dev/null; then
-        log_error "Docker is not running. Start Docker and re-run this script."
-        exit 1
-    fi
+    # Wait up to 30s for the daemon to be ready (handles post-install startup lag)
+    local retries=0
+    while ! docker info &>/dev/null; do
+        if [[ $retries -ge 6 ]]; then
+            log_error "Docker daemon did not start in time."
+            log_info "Try starting it manually, then re-run this script:"
+            log_info "  sudo systemctl start docker   # Linux"
+            log_info "  open -a Docker                # macOS"
+            exit 1
+        fi
+        log_info "Waiting for Docker daemon... (${retries}/6)"
+        sleep 5
+        retries=$((retries + 1))
+    done
     log_success "Docker is running"
 }
 
