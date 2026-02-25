@@ -464,30 +464,6 @@ volumes:
 OVERRIDE
 }
 
-prompt_github_token() {
-    log_step "GitHub Token"
-    echo "  Required for posting review comments on GitHub Pull Requests."
-    echo "  Scopes needed: 'repo' (private repos) or 'public_repo' (public only)."
-    echo "  Create one at: https://github.com/settings/tokens"
-    echo
-
-    local current
-    current=$(get_env "GITHUB_TOKEN" "")
-
-    if [[ -n "$current" && "$current" != "ghp_..." ]]; then
-        log_info "GitHub token already set (${current:0:8}…)"
-        ask "Change it? (y/N): " "n"
-        [[ ! "$REPLY_VALUE" =~ ^[Yy]$ ]] && return
-    fi
-
-    ask "GitHub personal access token (leave blank to add to .env later): " "" "true"
-    if [[ -n "$REPLY_VALUE" ]]; then
-        set_env "GITHUB_TOKEN" "$REPLY_VALUE"
-        log_success "GitHub token configured"
-    else
-        log_warning "GITHUB_TOKEN not set — add it to .env before enabling GitHub webhooks"
-    fi
-}
 
 show_summary() {
     local provider model embedding depth url admin_email
@@ -508,8 +484,9 @@ show_summary() {
     echo -e "  ${GREEN}LLM:${NC}          $provider / $model"
     echo -e "  ${GREEN}Embeddings:${NC}   ${embedding:-none}"
     echo -e "  ${GREEN}Review depth:${NC} $depth"
-    [[ "$USE_OLLAMA_DOCKER" == "true" ]] && \
+    if [[ "$USE_OLLAMA_DOCKER" == "true" ]]; then
         echo -e "  ${GREEN}Ollama:${NC}       Docker container (docker-compose.override.yml)"
+    fi
     echo ""
 
     # Warn about missing required keys
@@ -533,13 +510,11 @@ show_summary() {
             ;;
     esac
 
-    local gh_token
-    gh_token=$(get_env "GITHUB_TOKEN" "")
-    [[ -z "$gh_token" || "$gh_token" == "ghp_..." ]] && \
-        { log_warning "GITHUB_TOKEN not set — GitHub PR reviews won't post comments"; has_warning=true; }
 
     [[ "$has_warning" == "true" ]] && echo ""
-    echo -e "  ${CYAN}Tip:${NC} Edit .env at any time to update keys without re-running this script."
+    echo -e "  ${CYAN}Next:${NC} Open $url — log in, then connect your repos via the dashboard."
+    echo -e "         Each repo takes its own GitHub/Azure DevOps token at connection time."
+    echo -e "  ${CYAN}Tip:${NC}  Edit .env at any time to update keys without re-running this script."
     echo ""
 
     ask "Start AgnusAI now? (docker compose up --build) (Y/n): " "y"
@@ -578,7 +553,6 @@ main() {
         prompt_ollama_setup
     fi
 
-    prompt_github_token
     show_summary
 
     echo ""
