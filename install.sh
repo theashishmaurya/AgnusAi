@@ -73,10 +73,40 @@ check_os() {
     esac
 }
 
+install_docker_linux() {
+    log_info "Installing latest Docker CE via get.docker.com..."
+    # Remove any old distro-packaged docker first
+    sudo apt-get remove -y docker docker-engine docker.io containerd runc 2>/dev/null \
+        || sudo yum remove -y docker docker-client docker-client-latest docker-common \
+           docker-latest docker-latest-logrotate docker-logrotate docker-engine 2>/dev/null \
+        || true
+    curl -fsSL https://get.docker.com | sudo sh
+    sudo systemctl enable docker
+    sudo systemctl start docker
+    sudo usermod -aG docker "$USER" || true
+}
+
 check_docker() {
     log_info "Checking Docker..."
+
+    local need_install=false
     if ! command -v docker &>/dev/null; then
-        log_warning "Docker not found — installing..."
+        need_install=true
+    else
+        # Check Docker API version — must be >= 1.44 (Docker CE 23+)
+        local api_ver
+        api_ver=$(docker version --format '{{.Server.APIVersion}}' 2>/dev/null \
+            || sudo docker version --format '{{.Server.APIVersion}}' 2>/dev/null || echo "0")
+        local major minor
+        major=$(echo "$api_ver" | cut -d'.' -f1)
+        minor=$(echo "$api_ver" | cut -d'.' -f2)
+        if [[ "$major" -lt 1 ]] || [[ "$major" -eq 1 && "$minor" -lt 44 ]]; then
+            log_warning "Docker API version $api_ver is too old (need 1.44+). Upgrading..."
+            need_install=true
+        fi
+    fi
+
+    if [[ "$need_install" == "true" ]]; then
         if [[ "$OSTYPE" == "darwin"* ]]; then
             if command -v brew &>/dev/null; then
                 brew install --cask docker
@@ -87,34 +117,7 @@ check_docker() {
                 exit 1
             fi
         elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
-            if command -v apt-get &>/dev/null; then
-                sudo apt-get update -y
-                sudo apt-get install -y ca-certificates curl
-                sudo install -m 0755 -d /etc/apt/keyrings
-                curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-                    | sudo gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-                echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
-                    https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable" \
-                    | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
-                sudo apt-get update -y
-                sudo apt-get install -y docker-ce docker-ce-cli containerd.io \
-                    docker-buildx-plugin docker-compose-plugin
-                sudo systemctl enable docker
-                sudo systemctl start docker
-                sudo usermod -aG docker "$USER" || true
-            elif command -v yum &>/dev/null; then
-                sudo yum install -y dnf-plugins-core
-                sudo yum-config-manager -y --add-repo \
-                    https://download.docker.com/linux/centos/docker-ce.repo
-                sudo yum install -y docker-ce docker-ce-cli containerd.io \
-                    docker-buildx-plugin docker-compose-plugin
-                sudo systemctl enable docker
-                sudo systemctl start docker
-                sudo usermod -aG docker "$USER" || true
-            else
-                log_error "Cannot detect package manager. See https://docs.docker.com/get-docker/"
-                exit 1
-            fi
+            install_docker_linux
         else
             log_error "Auto-install not supported. See https://docs.docker.com/get-docker/"
             exit 1
