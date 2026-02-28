@@ -11,46 +11,76 @@ const execAsync = promisify(exec)
 export async function webhookRoutes(app: FastifyInstance): Promise<void> {
   const pool: Pool = app.db
   const webhookSecret = process.env.WEBHOOK_SECRET ?? ''
+  const webhookRateMax = parseInt(process.env.RATE_LIMIT_WEBHOOK_MAX ?? '120', 10)
+  const webhookRateWindow = process.env.RATE_LIMIT_WEBHOOK_WINDOW ?? '1 minute'
+  const webhookRateLimit = {
+    max: Number.isFinite(webhookRateMax) && webhookRateMax > 0 ? webhookRateMax : 120,
+    timeWindow: webhookRateWindow,
+  }
 
-  // ─── GitHub ──────────────────────────────────────────────────────────────
-
-  app.post('/api/webhooks/github', {
-    config: { rawBody: true },
-  }, async (req, reply) => {
-    // Verify signature
-    const sig = req.headers['x-hub-signature-256'] as string | undefined
-    if (!verifyGitHubSignature(webhookSecret, req.rawBody ?? '', sig)) {
-      return reply.status(401).send({ error: 'Invalid signature' })
+  const canonicalizeRepoUrl = (raw: string): string => {
+    try {
+      const u = new URL(raw.trim())
+      // Normalize Azure URL variants:
+      // - https://user@dev.azure.com/org/project/_git/repo
+      // - https://dev.azure.com/org/project/_git/repo
+      const host = u.host.toLowerCase()
+      const path = u.pathname.replace(/\/+$/, '').replace(/\.git$/, '')
+      return `${u.protocol}//${host}${path}`.toLowerCase()
+    } catch {
+      return raw.trim().replace(/\/+$/, '').replace(/\.git$/, '').toLowerCase()
     }
+  }
 
-    const event = req.headers['x-github-event'] as string
-    const payload = req.body as Record<string, unknown>
+  const resolveRepoId = async (repoUrl: string, orgSlug?: string): Promise<string | null> => {
+    const incomingCanonical = canonicalizeRepoUrl(repoUrl)
+    if (orgSlug) {
+      const r = await pool.query<{ repo_id: string; repo_url: string }>(
+        `SELECT r.repo_id, r.repo_url
+         FROM repos r
+         JOIN organizations o ON o.id = r.org_id
+         WHERE r.repo_url = $1 AND o.slug = $2
+         ORDER BY r.created_at DESC`,
+        [repoUrl, orgSlug],
+      )
+      if (r.rows[0]) return r.rows[0].repo_id
+      const candidates = await pool.query<{ repo_id: string; repo_url: string }>(
+        `SELECT r.repo_id, r.repo_url
+         FROM repos r
+         JOIN organizations o ON o.id = r.org_id
+         WHERE o.slug = $1
+         ORDER BY r.created_at DESC`,
+        [orgSlug],
+      )
+      const matched = candidates.rows.find(c => canonicalizeRepoUrl(c.repo_url) === incomingCanonical)
+      return matched?.repo_id ?? null
+    }
+    const r = await pool.query<{ repo_id: string; repo_url: string }>(
+      'SELECT repo_id, repo_url FROM repos WHERE repo_url = $1 ORDER BY created_at DESC LIMIT 1',
+      [repoUrl],
+    )
+    if (r.rows[0]) return r.rows[0].repo_id
+    const candidates = await pool.query<{ repo_id: string; repo_url: string }>(
+      'SELECT repo_id, repo_url FROM repos ORDER BY created_at DESC',
+    )
+    const matched = candidates.rows.find(c => canonicalizeRepoUrl(c.repo_url) === incomingCanonical)
+    return matched?.repo_id ?? null
+  }
 
-    // Look up repoId from the push or PR payload
-    const repoUrl = (payload.repository as any)?.html_url as string | undefined
-    if (!repoUrl) return reply.status(200).send({ ok: true })
-
-    const repoId = Buffer.from(repoUrl).toString('base64url').slice(0, 32)
-
+  const processGithubPR = async (event: string, payload: Record<string, unknown>, repoId: string, repoUrl: string) => {
     if (event === 'push') {
-      // Extract the branch from refs/heads/<branch>
       const branch = ((payload.ref as string) ?? '').replace('refs/heads/', '') || 'main'
-
-      // Only update if this branch is indexed
       const isBranchIndexed = await isIndexedBranch(pool, repoId, branch)
-      if (!isBranchIndexed) {
-        return reply.status(200).send({ ok: true })
-      }
-
+      if (!isBranchIndexed) return
       setImmediate(() => runPushIndex(pool, repoId, branch, '[webhook]'))
-    } else if (event === 'pull_request') {
+      return
+    }
+    if (event === 'pull_request') {
       const action = payload.action as string
       if (action === 'opened' || action === 'synchronize') {
         const prNumber = (payload.pull_request as any)?.number as number
         const baseBranch = ((payload.pull_request as any)?.base?.ref as string) ?? 'main'
-        // On re-push, use checkpoint-based incremental review (only new commits)
         const incrementalReview = action === 'synchronize'
-
         setImmediate(async () => {
           try {
             await runReview({
@@ -62,6 +92,7 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
               token: await getRepoToken(pool, repoId),
               pool,
               incrementalReview,
+              prAction: action === 'synchronize' ? 'synchronize' : 'opened',
             })
           } catch (err) {
             console.error('[webhook] Review failed for PR', prNumber, (err as Error).message)
@@ -69,44 +100,23 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
         })
       }
     }
+  }
 
-    return reply.status(200).send({ ok: true })
-  })
-
-  // ─── Azure DevOps ─────────────────────────────────────────────────────────
-
-  app.post('/api/webhooks/azure', async (req, reply) => {
-    const payload = req.body as Record<string, unknown>
+  const processAzurePR = async (payload: Record<string, unknown>, repoId: string, repoUrl: string) => {
     const eventType = payload.eventType as string | undefined
-
-    // Extract repo URL from Azure payload
-    const repoUrl = (payload.resource as any)?.repository?.remoteUrl as string | undefined
-    if (!repoUrl) return reply.status(200).send({ ok: true })
-
-    const repoId = Buffer.from(repoUrl).toString('base64url').slice(0, 32)
-
     if (eventType === 'git.push') {
-      // Extract branch from refUpdates[0].name (refs/heads/<branch>)
       const refUpdates = (payload.resource as any)?.refUpdates as any[] ?? []
       const branch = ((refUpdates[0]?.name as string) ?? '').replace('refs/heads/', '') || 'main'
-
-      // Only update if this branch is indexed
       const isBranchIndexed = await isIndexedBranch(pool, repoId, branch)
-      if (!isBranchIndexed) {
-        return reply.status(200).send({ ok: true })
-      }
-
+      if (!isBranchIndexed) return
       setImmediate(() => runPushIndex(pool, repoId, branch, '[webhook:azure]'))
-    } else if (
-      eventType === 'git.pullrequest.created' ||
-      eventType === 'git.pullrequest.updated'
-    ) {
+      return
+    }
+    if (eventType === 'git.pullrequest.created' || eventType === 'git.pullrequest.updated') {
       const prId = (payload.resource as any)?.pullRequestId as number
       const targetRef = ((payload.resource as any)?.targetRefName as string) ?? 'refs/heads/main'
       const baseBranch = targetRef.replace('refs/heads/', '') || 'main'
-      // On re-push, only diff the new commits (latest vs previous iteration)
       const incrementalDiff = eventType === 'git.pullrequest.updated'
-
       setImmediate(async () => {
         try {
           await runReview({
@@ -118,12 +128,99 @@ export async function webhookRoutes(app: FastifyInstance): Promise<void> {
             token: await getRepoToken(pool, repoId),
             pool,
             incrementalDiff,
+            prAction: eventType === 'git.pullrequest.updated' ? 'updated' : 'created',
           })
         } catch (err) {
           console.error('[webhook:azure] Review failed for PR', prId, (err as Error).message)
         }
       })
     }
+  }
+
+  // ─── Multi-org webhook endpoints ───────────────────────────────────────────
+  app.post('/api/webhooks/github/:orgSlug', {
+    config: { rawBody: true, rateLimit: webhookRateLimit },
+  }, async (req, reply) => {
+    const { orgSlug } = req.params as { orgSlug: string }
+    const orgRes = await pool.query<{ id: string }>('SELECT id FROM organizations WHERE slug = $1', [orgSlug])
+    if (orgRes.rows.length === 0) return reply.status(404).send({ error: 'org not found' })
+    const secretRes = await pool.query<{ secret: string }>(
+      `SELECT secret FROM org_webhook_secrets WHERE org_id = $1 AND platform = 'github'`,
+      [orgRes.rows[0].id],
+    )
+    const secret = secretRes.rows[0]?.secret || webhookSecret
+    const sig = req.headers['x-hub-signature-256'] as string | undefined
+    if (!verifyGitHubSignature(secret, req.rawBody ?? '', sig)) {
+      return reply.status(401).send({ error: 'Invalid signature' })
+    }
+    const payload = req.body as Record<string, unknown>
+    const event = req.headers['x-github-event'] as string
+    const repoUrl = (payload.repository as any)?.html_url as string | undefined
+    if (!repoUrl) return reply.status(200).send({ ok: true })
+    const repoId = await resolveRepoId(repoUrl, orgSlug)
+    if (!repoId) return reply.status(200).send({ ok: true })
+    await processGithubPR(event, payload, repoId, repoUrl)
+    return reply.status(200).send({ ok: true })
+  })
+
+  app.post('/api/webhooks/azure/:orgSlug', { config: { rateLimit: webhookRateLimit } }, async (req, reply) => {
+    const { orgSlug } = req.params as { orgSlug: string }
+    const orgRes = await pool.query<{ id: string }>('SELECT id FROM organizations WHERE slug = $1', [orgSlug])
+    if (orgRes.rows.length === 0) return reply.status(404).send({ error: 'org not found' })
+    const secretRes = await pool.query<{ secret: string }>(
+      `SELECT secret FROM org_webhook_secrets WHERE org_id = $1 AND platform = 'azure'`,
+      [orgRes.rows[0].id],
+    )
+    const secret = secretRes.rows[0]?.secret || webhookSecret
+    const providedSecret = req.headers['x-webhook-secret'] as string | undefined
+    if (!verifySharedWebhookSecret(secret, providedSecret)) {
+      return reply.status(401).send({ error: 'Invalid webhook secret' })
+    }
+    const payload = req.body as Record<string, unknown>
+    const repoUrl = (payload.resource as any)?.repository?.remoteUrl as string | undefined
+    if (!repoUrl) return reply.status(200).send({ ok: true })
+    const repoId = await resolveRepoId(repoUrl, orgSlug)
+    if (!repoId) return reply.status(200).send({ ok: true })
+    await processAzurePR(payload, repoId, repoUrl)
+    return reply.status(200).send({ ok: true })
+  })
+
+  // ─── GitHub ──────────────────────────────────────────────────────────────
+
+  app.post('/api/webhooks/github', {
+    config: { rawBody: true, rateLimit: webhookRateLimit },
+  }, async (req, reply) => {
+    // Verify signature
+    const sig = req.headers['x-hub-signature-256'] as string | undefined
+    if (!verifyGitHubSignature(webhookSecret, req.rawBody ?? '', sig)) {
+      return reply.status(401).send({ error: 'Invalid signature' })
+    }
+
+    const event = req.headers['x-github-event'] as string
+    const payload = req.body as Record<string, unknown>
+
+    const repoUrl = (payload.repository as any)?.html_url as string | undefined
+    if (!repoUrl) return reply.status(200).send({ ok: true })
+    const repoId = await resolveRepoId(repoUrl)
+    if (!repoId) return reply.status(200).send({ ok: true })
+    await processGithubPR(event, payload, repoId, repoUrl)
+
+    return reply.status(200).send({ ok: true })
+  })
+
+  // ─── Azure DevOps ─────────────────────────────────────────────────────────
+
+  app.post('/api/webhooks/azure', { config: { rateLimit: webhookRateLimit } }, async (req, reply) => {
+    const providedSecret = req.headers['x-webhook-secret'] as string | undefined
+    if (!verifySharedWebhookSecret(webhookSecret, providedSecret)) {
+      return reply.status(401).send({ error: 'Invalid webhook secret' })
+    }
+    const payload = req.body as Record<string, unknown>
+    const repoUrl = (payload.resource as any)?.repository?.remoteUrl as string | undefined
+    if (!repoUrl) return reply.status(200).send({ ok: true })
+    const repoId = await resolveRepoId(repoUrl)
+    if (!repoId) return reply.status(200).send({ ok: true })
+    await processAzurePR(payload, repoId, repoUrl)
 
     return reply.status(200).send({ ok: true })
   })
@@ -139,6 +236,16 @@ function verifyGitHubSignature(secret: string, rawBody: string | Buffer, sig?: s
   const expected = `sha256=${hmac.digest('hex')}`
   try {
     return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(sig))
+  } catch {
+    return false
+  }
+}
+
+function verifySharedWebhookSecret(secret: string, provided?: string): boolean {
+  if (!secret) return true
+  if (!provided) return false
+  try {
+    return crypto.timingSafeEqual(Buffer.from(secret), Buffer.from(provided))
   } catch {
     return false
   }

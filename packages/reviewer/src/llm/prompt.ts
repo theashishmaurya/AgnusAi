@@ -1,7 +1,7 @@
 // Shared prompt builder — provider-agnostic
 
 import type { GraphReviewContext } from '@agnus-ai/shared';
-import { ReviewContext, Diff } from '../types';
+import { ReviewContext, Diff, ReviewResult } from '../types';
 
 export function buildReviewPrompt(context: ReviewContext): string {
   const { pr, diff, skills, config, graphContext } = context;
@@ -218,4 +218,62 @@ export function buildDiffSummary(diff: Diff, maxChars: number = 30000): { conten
   }
 
   return { content, truncated: false, truncatedCount: 0 };
+}
+
+export function buildPRDescriptionPrompt(context: ReviewContext, review: ReviewResult): string {
+  const { pr, diff, config } = context;
+  const maxChars = config?.maxDiffSize ?? 30000;
+  const diffResult = buildDiffSummary(diff, maxChars);
+
+  const fileList = diff.files
+    .map(f => `- ${f.path} (${f.status}, +${f.additions}/-${f.deletions})`)
+    .join('\n');
+
+  return `You are generating a high-quality pull request description for humans.
+
+## Current PR
+Title: ${pr.title}
+Author: ${pr.author.username}
+Branch: ${pr.sourceBranch} -> ${pr.targetBranch}
+
+## Existing Description
+${pr.description || 'No description provided.'}
+
+## Changed Files (${diff.files.length} files)
+${fileList}
+
+## Diff
+${diffResult.content}
+
+## Review Signal (for context)
+Summary: ${review.summary}
+Verdict: ${review.verdict}
+Comment Count: ${review.comments.length}
+
+## Task
+Generate:
+1) An improved PR title
+2) A complete PR body in markdown with these sections:
+   - ## What Changed
+   - ## Why It Changed
+   - ## Walkthrough
+3) Change type category: bug|feature|refactor|docs|tests|chore
+4) 2-6 labels (short slugs)
+
+## Walkthrough Rules
+- Use one bullet per materially changed file or module.
+- Keep each bullet concise and specific.
+- Mention concrete components/functions from the diff when available.
+
+## Output Format (STRICT)
+TITLE: <single line>
+CHANGE_TYPE: bug|feature|refactor|docs|tests|chore
+LABELS: label-one, label-two, label-three
+BODY:
+<full markdown body>
+
+Rules:
+- Do not include any extra sections outside the format above.
+- The markdown body must be valid and reviewer-friendly.
+- Avoid generic filler text.`;
 }

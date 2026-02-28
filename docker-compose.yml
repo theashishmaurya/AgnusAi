@@ -71,6 +71,19 @@ services:
       # BASE_URL - internal URL for Docker routing (defaults to PUBLIC_URL if not set)
       - BASE_URL=${BASE_URL:-${PUBLIC_URL:-http://localhost:3000}}
       - FEEDBACK_SECRET=${FEEDBACK_SECRET:-}
+      # Rate limiting / abuse protection
+      - TRUST_PROXY=${TRUST_PROXY:-true}
+      - RATE_LIMIT_ENABLED=${RATE_LIMIT_ENABLED:-true}
+      - RATE_LIMIT_GLOBAL_MAX=${RATE_LIMIT_GLOBAL_MAX:-300}
+      - RATE_LIMIT_GLOBAL_WINDOW=${RATE_LIMIT_GLOBAL_WINDOW:-1 minute}
+      - RATE_LIMIT_AUTH_MAX=${RATE_LIMIT_AUTH_MAX:-20}
+      - RATE_LIMIT_AUTH_WINDOW=${RATE_LIMIT_AUTH_WINDOW:-1 minute}
+      - RATE_LIMIT_SIGNUP_MAX=${RATE_LIMIT_SIGNUP_MAX:-5}
+      - RATE_LIMIT_SIGNUP_WINDOW=${RATE_LIMIT_SIGNUP_WINDOW:-10 minutes}
+      - RATE_LIMIT_CHECK_ORG_MAX=${RATE_LIMIT_CHECK_ORG_MAX:-20}
+      - RATE_LIMIT_CHECK_ORG_WINDOW=${RATE_LIMIT_CHECK_ORG_WINDOW:-1 minute}
+      - RATE_LIMIT_WEBHOOK_MAX=${RATE_LIMIT_WEBHOOK_MAX:-120}
+      - RATE_LIMIT_WEBHOOK_WINDOW=${RATE_LIMIT_WEBHOOK_WINDOW:-1 minute}
       # Docker internal DNS resolution
       - HOST_ID=host.docker.internal
     volumes:

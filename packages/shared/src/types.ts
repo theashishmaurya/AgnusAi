@@ -53,3 +53,52 @@ export interface IndexStats {
   fileCount: number
   durationMs: number
 }
+
+export const USER_ROLES = ['admin', 'member'] as const
+export type UserRole = (typeof USER_ROLES)[number]
+
+export const ORG_ROLES = ['admin', 'member'] as const
+export type OrgRole = (typeof ORG_ROLES)[number]
+
+export const VCS_PLATFORMS = ['github', 'azure'] as const
+export type VcsPlatform = (typeof VCS_PLATFORMS)[number]
+
+export interface OrgMembership {
+  orgId: string
+  slug: string
+  name: string
+  role: OrgRole
+}
+
+export interface AuthJwtClaims {
+  id: string
+  email: string
+  role: UserRole
+  isSystemAdmin: boolean
+  activeOrgId: string | null
+  activeOrgRole: OrgRole | null
+}
+
+export function isUserRole(value: unknown): value is UserRole {
+  return typeof value === 'string' && (USER_ROLES as readonly string[]).includes(value)
+}
+
+export function isOrgRole(value: unknown): value is OrgRole {
+  return typeof value === 'string' && (ORG_ROLES as readonly string[]).includes(value)
+}
+
+export function isVcsPlatform(value: unknown): value is VcsPlatform {
+  return typeof value === 'string' && (VCS_PLATFORMS as readonly string[]).includes(value)
+}
+
+export function coerceUserRole(value: unknown, fallback: UserRole = 'member'): UserRole {
+  return isUserRole(value) ? value : fallback
+}
+
+export function coerceOrgRole(value: unknown, fallback: OrgRole = 'member'): OrgRole {
+  return isOrgRole(value) ? value : fallback
+}
+
+export function coerceNullableOrgRole(value: unknown): OrgRole | null {
+  return isOrgRole(value) ? value : null
+}

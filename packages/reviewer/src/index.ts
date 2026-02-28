@@ -340,7 +340,19 @@ export class PRReviewAgent {
     return result;
   }
 
-  async postReview(prId: string | number, result: ReviewResult): Promise<void> {
+  async postReview(
+    prId: string | number,
+    result: ReviewResult,
+    options: {
+      updatePRDescription?: boolean
+      prDescription?: {
+        publishMode?: 'replace_pr' | 'comment'
+        preserveOriginal?: boolean
+        useMarkers?: boolean
+        publishLabels?: boolean
+      }
+    } = {}
+  ): Promise<void> {
     const { summary, verdict } = result;
 
     // Build a set of canonical diff paths (normalised: no leading slash) for matching
@@ -390,10 +402,95 @@ export class PRReviewAgent {
       verdict
     });
 
+    const shouldUpdatePRDescription =
+      options.updatePRDescription !== false &&
+      this.config.review?.enablePRDescription !== false;
+
+    if (shouldUpdatePRDescription && this.vcs.updatePRDescription) {
+      try {
+        await this.generateAndUpdatePRDescription(prId, result, options.prDescription);
+      } catch (error: any) {
+        console.warn(`⚠️  Failed to update PR description: ${error.message}`);
+      }
+    }
+
     // Create checkpoint after successful review (only if not already handled by incrementalReview)
     if (!this.checkpointHandled && this.vcs instanceof GitHubAdapter) {
       await this.createCheckpointAfterReview(prId, result);
     }
+  }
+
+  private async generateAndUpdatePRDescription(
+    prId: string | number,
+    result: ReviewResult,
+    behavior: {
+      publishMode?: 'replace_pr' | 'comment'
+      preserveOriginal?: boolean
+      useMarkers?: boolean
+      publishLabels?: boolean
+    } = {}
+  ): Promise<void> {
+    const pr = await this.vcs.getPR(prId);
+    const diff = this.lastDiff ?? await this.vcs.getDiff(prId);
+    const files = await this.vcs.getFiles(prId);
+
+    const context: ReviewContext = {
+      pr,
+      diff,
+      files,
+      tickets: [],
+      skills: [],
+      config: this.config.review
+    };
+
+    const description = await this.llm.generatePRDescription(context, result);
+    const publishMode = behavior.publishMode ?? 'replace_pr';
+    const preserveOriginal = behavior.preserveOriginal ?? true;
+    const useMarkers = behavior.useMarkers ?? false;
+    const publishLabels = behavior.publishLabels ?? true;
+
+    if (publishMode === 'comment') {
+      const labelsText = description.labels.length > 0 ? description.labels.join(', ') : 'none';
+      await this.vcs.addComment(prId, {
+        path: '',
+        line: 1,
+        severity: 'info',
+        body:
+          `## PR Description Proposal\n\n` +
+          `**Suggested Title:** ${description.title}\n` +
+          `**Change Type:** ${description.changeType}\n` +
+          `**Labels:** ${labelsText}\n\n` +
+          `${description.body}`
+      });
+      console.log('📝 Posted PR description as a comment (publishMode=comment).');
+      return;
+    }
+
+    let bodyToPublish = description.body;
+    const markerStart = '<!-- AGNUSAI:START -->';
+    const markerEnd = '<!-- AGNUSAI:END -->';
+
+    if (useMarkers) {
+      const existing = pr.description || '';
+      const start = existing.indexOf(markerStart);
+      const end = existing.indexOf(markerEnd);
+      if (start === -1 || end === -1 || end < start) {
+        console.log('📝 Skipping PR description update — markers not found.');
+        return;
+      }
+      const before = existing.slice(0, start + markerStart.length).trimEnd();
+      const after = existing.slice(end).trimStart();
+      bodyToPublish = `${before}\n\n${description.body}\n\n${after}`;
+    } else if (preserveOriginal && pr.description?.trim()) {
+      bodyToPublish = `${pr.description.trim()}\n\n---\n\n## AgnusAI Description\n\n${description.body}`;
+    }
+
+    await this.vcs.updatePRDescription!(prId, {
+      ...description,
+      body: bodyToPublish,
+      labels: publishLabels ? description.labels : []
+    });
+    console.log(`📝 Updated PR title/body and labels (${publishLabels ? description.labels.length : 0} labels).`);
   }
 
   /**

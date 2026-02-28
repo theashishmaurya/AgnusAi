@@ -14,7 +14,8 @@ import {
   DiffHunk,
   DetailedReviewComment,
   PRComment,
-  ReviewCheckpoint
+  ReviewCheckpoint,
+  PRDescriptionResult
 } from '../../types';
 
 interface AzureDevOpsConfig {
@@ -586,6 +587,84 @@ export class AzureDevOpsAdapter implements VCSAdapter {
   async getAuthor(prId: string | number): Promise<Author> {
     const pr = await this.getPR(prId);
     return pr.author;
+  }
+
+  async updatePRDescription(prId: string | number, description: PRDescriptionResult): Promise<void> {
+    const prUrl = this.getGitApiUrl(
+      `/repositories/${this.repository}/pullrequests/${prId}?api-version=7.0`
+    );
+
+    const response = await fetch(prUrl, {
+      method: 'PATCH',
+      headers: this.getAuthHeaders(),
+      body: JSON.stringify({
+        title: description.title,
+        description: description.body,
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Failed to update PR description: ${response.statusText}`);
+    }
+
+    const desiredLabels = new Set<string>([
+      `type:${description.changeType}`,
+      ...description.labels.map(l => l.trim()).filter(Boolean)
+    ]);
+
+    if (desiredLabels.size === 0) {
+      return;
+    }
+
+    const existingLabels = await this.getPRLabels(prId);
+    for (const label of desiredLabels) {
+      if (existingLabels.has(label.toLowerCase())) continue;
+      await this.addPRLabel(prId, label);
+    }
+  }
+
+  private async getPRLabels(prId: string | number): Promise<Set<string>> {
+    const versions = ['7.1', '7.1-preview.1'];
+    for (const version of versions) {
+      const url = this.getGitApiUrl(
+        `/repositories/${this.repository}/pullrequests/${prId}/labels?api-version=${version}`
+      );
+      const response = await fetch(url, { headers: this.getAuthHeaders() });
+      if (!response.ok) continue;
+
+      const data = await response.json() as { value?: Array<{ name?: string }> };
+      const labels = new Set<string>();
+      for (const entry of data.value || []) {
+        if (entry.name) labels.add(entry.name.toLowerCase());
+      }
+      return labels;
+    }
+    return new Set<string>();
+  }
+
+  private async addPRLabel(prId: string | number, label: string): Promise<void> {
+    const versions = ['7.1', '7.1-preview.1'];
+    let lastStatus = '';
+
+    for (const version of versions) {
+      const url = this.getGitApiUrl(
+        `/repositories/${this.repository}/pullrequests/${prId}/labels?api-version=${version}`
+      );
+
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: this.getAuthHeaders(),
+        body: JSON.stringify({ name: label })
+      });
+
+      if (response.ok || response.status === 409) {
+        return;
+      }
+
+      lastStatus = response.statusText;
+    }
+
+    throw new Error(`Failed to add PR label "${label}": ${lastStatus || 'unknown error'}`);
   }
 
   async getFileContent(path: string, ref?: string): Promise<string> {

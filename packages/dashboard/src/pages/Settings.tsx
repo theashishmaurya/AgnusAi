@@ -3,10 +3,36 @@ import { Check, Copy, CheckCircle, AlertTriangle } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { useAuth } from '@/hooks/useAuth'
+import { usePermissions } from '@/hooks/usePermissions'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Switch } from '@/components/ui/switch'
 
 type Depth = 'fast' | 'standard' | 'deep'
-type Section = 'review-depth' | 'team' | 'api-key'
+type Section = 'review-depth' | 'pr-description' | 'team' | 'api-key'
+type Platform = 'github' | 'azure'
+type UpdateMode = PRDescriptionSettings['updateMode']
+type PublishMode = PRDescriptionSettings['publishMode']
+
+type PRDescriptionSettings = {
+  enabled: boolean
+  updateMode: 'created_only' | 'created_and_updated'
+  publishMode: 'replace_pr' | 'comment'
+  preserveOriginal: boolean
+  useMarkers: boolean
+  publishLabels: boolean
+}
+
+type PRDescriptionOverrides = {
+  enabled?: boolean | null
+  updateMode?: 'created_only' | 'created_and_updated' | null
+  publishMode?: 'replace_pr' | 'comment' | null
+  preserveOriginal?: boolean | null
+  useMarkers?: boolean | null
+  publishLabels?: boolean | null
+}
+
+type Repo = { repoId: string; repoUrl: string; platform: Platform }
+type Org = { orgKey: string; orgName: string; platform: Platform }
 
 const DEPTH_OPTIONS: Array<{
   key: Depth
@@ -40,8 +66,23 @@ const DEPTH_OPTIONS: Array<{
   },
 ]
 
+const UPDATE_MODE_OPTIONS: Array<{ value: UpdateMode; label: string }> = [
+  { value: 'created_only', label: 'created only' },
+  { value: 'created_and_updated', label: 'created and updated' },
+]
+
+const PUBLISH_MODE_OPTIONS: Array<{ value: PublishMode; label: string }> = [
+  { value: 'replace_pr', label: 'replace PR body' },
+  { value: 'comment', label: 'publish as comment' },
+]
+
+function parseNullableBoolean(value: string): boolean | null {
+  if (value === 'inherit') return null
+  return value === 'true'
+}
+
 export default function Settings() {
-  const { user } = useAuth()
+  const { user, isOrgAdmin, canInviteMembers, canManageSystemApiKey } = usePermissions()
   const [section, setSection] = useState<Section>('review-depth')
   const [depth, setDepth] = useState<Depth>('standard')
   const [saved, setSaved] = useState(false)
@@ -52,6 +93,14 @@ export default function Settings() {
   const [newApiKey, setNewApiKey] = useState('')
   const [apiKeyCopied, setApiKeyCopied] = useState(false)
   const [apiKeyLoading, setApiKeyLoading] = useState(false)
+  const [repos, setRepos] = useState<Repo[]>([])
+  const [orgs, setOrgs] = useState<Org[]>([])
+  const [selectedOrgKey, setSelectedOrgKey] = useState('')
+  const [selectedRepoId, setSelectedRepoId] = useState('')
+  const [orgSettings, setOrgSettings] = useState<PRDescriptionSettings | null>(null)
+  const [repoEffective, setRepoEffective] = useState<PRDescriptionSettings | null>(null)
+  const [repoOverrides, setRepoOverrides] = useState<PRDescriptionOverrides>({})
+  const [prSaved, setPrSaved] = useState(false)
 
   useEffect(() => {
     fetch('/api/settings', { credentials: 'include' })
@@ -61,12 +110,48 @@ export default function Settings() {
   }, [])
 
   useEffect(() => {
-    if (user?.role !== 'admin') return
+    if (!canManageSystemApiKey) return
     fetch('/api/auth/api-key', { credentials: 'include' })
       .then(r => r.ok ? r.json() as Promise<{ exists: boolean; preview?: string }> : null)
       .then(d => { if (d?.exists && d.preview) setApiKeyPreview(d.preview) })
       .catch(() => {})
-  }, [user])
+  }, [canManageSystemApiKey])
+
+  useEffect(() => {
+    fetch('/api/repos', { credentials: 'include' })
+      .then(r => r.ok ? r.json() as Promise<Repo[]> : [])
+      .then(r => {
+        setRepos(r)
+        if (!selectedRepoId && r.length > 0) setSelectedRepoId(r[0].repoId)
+      })
+      .catch(() => {})
+    fetch('/api/orgs', { credentials: 'include' })
+      .then(r => r.ok ? r.json() as Promise<Org[]> : [])
+      .then(o => {
+        setOrgs(o)
+        if (!selectedOrgKey && o.length > 0) setSelectedOrgKey(o[0].orgKey)
+      })
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
+    if (!selectedOrgKey) return
+    fetch(`/api/orgs/${encodeURIComponent(selectedOrgKey)}/settings`, { credentials: 'include' })
+      .then(r => r.ok ? r.json() as Promise<{ prDescription: PRDescriptionSettings }> : null)
+      .then(d => { if (d?.prDescription) setOrgSettings(d.prDescription) })
+      .catch(() => {})
+  }, [selectedOrgKey])
+
+  useEffect(() => {
+    if (!selectedRepoId) return
+    fetch(`/api/repos/${encodeURIComponent(selectedRepoId)}/settings`, { credentials: 'include' })
+      .then(r => r.ok ? r.json() as Promise<{ prDescription: { effective: PRDescriptionSettings; overrides: PRDescriptionOverrides } }> : null)
+      .then(d => {
+        if (d?.prDescription?.effective) setRepoEffective(d.prDescription.effective)
+        if (d?.prDescription?.overrides) setRepoOverrides(d.prDescription.overrides)
+      })
+      .catch(() => {})
+  }, [selectedRepoId])
 
   async function save() {
     await fetch('/api/settings', {
@@ -124,10 +209,47 @@ export default function Settings() {
     setTimeout(() => setApiKeyCopied(false), 2000)
   }
 
-  const NAV: Array<{ key: Section; label: string; adminOnly?: boolean }> = [
+  async function saveOrgPRSettings() {
+    const org = orgs.find(o => o.orgKey === selectedOrgKey)
+    if (!org || !orgSettings) return
+    await fetch(`/api/orgs/${encodeURIComponent(org.orgKey)}/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        platform: org.platform,
+        orgName: org.orgName,
+        prDescription: orgSettings,
+      }),
+    })
+    setPrSaved(true)
+    setTimeout(() => setPrSaved(false), 1500)
+  }
+
+  async function saveRepoPRSettings() {
+    if (!selectedRepoId) return
+    await fetch(`/api/repos/${encodeURIComponent(selectedRepoId)}/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({ prDescription: repoOverrides }),
+    })
+    // refresh effective + overrides after save
+    const res = await fetch(`/api/repos/${encodeURIComponent(selectedRepoId)}/settings`, { credentials: 'include' })
+    if (res.ok) {
+      const d = await res.json() as { prDescription: { effective: PRDescriptionSettings; overrides: PRDescriptionOverrides } }
+      setRepoEffective(d.prDescription.effective)
+      setRepoOverrides(d.prDescription.overrides)
+    }
+    setPrSaved(true)
+    setTimeout(() => setPrSaved(false), 1500)
+  }
+
+  const NAV: Array<{ key: Section; label: string; requires?: 'org_admin' | 'system_admin' }> = [
     { key: 'review-depth', label: 'Review Depth' },
-    { key: 'team', label: 'Team & Invites', adminOnly: true },
-    { key: 'api-key', label: 'API Key', adminOnly: true },
+    { key: 'pr-description', label: 'PR Description' },
+    { key: 'team', label: 'Team & Invites', requires: 'org_admin' },
+    { key: 'api-key', label: 'API Key', requires: 'system_admin' },
   ]
 
   return (
@@ -141,7 +263,11 @@ export default function Settings() {
         </div>
 
         <nav className="py-2 flex-1">
-          {NAV.filter(n => !n.adminOnly || user?.role === 'admin').map((n) => (
+          {NAV.filter(n =>
+            !n.requires ||
+            (n.requires === 'org_admin' && isOrgAdmin) ||
+            (n.requires === 'system_admin' && canManageSystemApiKey)
+          ).map((n) => (
             <button
               key={n.key}
               onClick={() => setSection(n.key)}
@@ -261,8 +387,188 @@ export default function Settings() {
           </div>
         )}
 
+        {section === 'pr-description' && (
+          <div className="space-y-8">
+            <p className="label-meta mb-3" style={{ color: '#E85A1A' }}>// pr-description</p>
+            <h1 className="text-[clamp(1.4rem,2.5vw,2rem)] font-bold leading-none tracking-tight text-foreground">
+              PR Description Rules.
+            </h1>
+
+            <div className="border border-border p-5 space-y-4">
+              <p className="font-semibold">Organization Defaults</p>
+              <div className="max-w-md">
+                <Select value={selectedOrgKey} onValueChange={setSelectedOrgKey}>
+                  <SelectTrigger><SelectValue placeholder="Select organization" /></SelectTrigger>
+                  <SelectContent>
+                    {orgs.map(o => <SelectItem key={o.orgKey} value={o.orgKey}>{o.platform} / {o.orgName}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              {orgSettings && (
+                <div className="grid gap-3 max-w-xl">
+                  <div className="label-meta flex items-center justify-between gap-3">
+                    <span>Enable PR description generation</span>
+                    <Switch checked={orgSettings.enabled} onCheckedChange={checked => setOrgSettings({ ...orgSettings, enabled: checked })} />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="label-meta">Update mode</label>
+                    <Select
+                      value={orgSettings.updateMode}
+                      onValueChange={(value: UpdateMode) => setOrgSettings({ ...orgSettings, updateMode: value })}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {UPDATE_MODE_OPTIONS.map(option => (
+                          <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="label-meta">Publish mode</label>
+                    <Select
+                      value={orgSettings.publishMode}
+                      onValueChange={(value: PublishMode) => setOrgSettings({ ...orgSettings, publishMode: value })}
+                    >
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {PUBLISH_MODE_OPTIONS.map(option => (
+                          <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="label-meta flex items-center justify-between gap-3">
+                    <span>Preserve original description content</span>
+                    <Switch checked={orgSettings.preserveOriginal} onCheckedChange={checked => setOrgSettings({ ...orgSettings, preserveOriginal: checked })} />
+                  </div>
+                  <div className="label-meta flex items-center justify-between gap-3">
+                    <span>Update only when markers are present</span>
+                    <Switch checked={orgSettings.useMarkers} onCheckedChange={checked => setOrgSettings({ ...orgSettings, useMarkers: checked })} />
+                  </div>
+                  <div className="label-meta flex items-center justify-between gap-3">
+                    <span>Publish labels</span>
+                    <Switch checked={orgSettings.publishLabels} onCheckedChange={checked => setOrgSettings({ ...orgSettings, publishLabels: checked })} />
+                  </div>
+                </div>
+              )}
+              <Button onClick={saveOrgPRSettings} disabled={!selectedOrgKey}>{prSaved ? '✓ Saved' : 'Save Org Defaults'}</Button>
+            </div>
+
+            <div className="border border-border p-5 space-y-4">
+              <p className="font-semibold">Repository Overrides (take precedence)</p>
+              <div className="max-w-md">
+                <Select value={selectedRepoId} onValueChange={setSelectedRepoId}>
+                  <SelectTrigger><SelectValue placeholder="Select repository" /></SelectTrigger>
+                  <SelectContent>
+                    {repos.map(r => <SelectItem key={r.repoId} value={r.repoId}>{r.platform} / {r.repoUrl.split('/').slice(-2).join('/')}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              {repoEffective && (
+                <p className="label-meta">Effective: {repoEffective.updateMode}, {repoEffective.publishMode}, labels={String(repoEffective.publishLabels)}</p>
+              )}
+              <div className="grid gap-3 max-w-xl">
+                <div className="space-y-2">
+                  <label className="label-meta">Enabled</label>
+                  <Select
+                    value={repoOverrides.enabled == null ? 'inherit' : (repoOverrides.enabled ? 'true' : 'false')}
+                    onValueChange={(value) => setRepoOverrides({ ...repoOverrides, enabled: parseNullableBoolean(value) })}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="inherit">inherit</SelectItem>
+                      <SelectItem value="true">true</SelectItem>
+                      <SelectItem value="false">false</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <label className="label-meta">Update mode</label>
+                  <Select
+                    value={repoOverrides.updateMode ?? 'inherit'}
+                    onValueChange={(value) => setRepoOverrides({
+                      ...repoOverrides,
+                      updateMode: value === 'inherit' ? null : (value as UpdateMode),
+                    })}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="inherit">inherit</SelectItem>
+                      {UPDATE_MODE_OPTIONS.map(option => (
+                        <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <label className="label-meta">Publish mode</label>
+                  <Select
+                    value={repoOverrides.publishMode ?? 'inherit'}
+                    onValueChange={(value) => setRepoOverrides({
+                      ...repoOverrides,
+                      publishMode: value === 'inherit' ? null : (value as PublishMode),
+                    })}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="inherit">inherit</SelectItem>
+                      {PUBLISH_MODE_OPTIONS.map(option => (
+                        <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <label className="label-meta">Preserve original</label>
+                  <Select
+                    value={repoOverrides.preserveOriginal == null ? 'inherit' : (repoOverrides.preserveOriginal ? 'true' : 'false')}
+                    onValueChange={(value) => setRepoOverrides({ ...repoOverrides, preserveOriginal: parseNullableBoolean(value) })}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="inherit">inherit</SelectItem>
+                      <SelectItem value="true">true</SelectItem>
+                      <SelectItem value="false">false</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <label className="label-meta">Use markers</label>
+                  <Select
+                    value={repoOverrides.useMarkers == null ? 'inherit' : (repoOverrides.useMarkers ? 'true' : 'false')}
+                    onValueChange={(value) => setRepoOverrides({ ...repoOverrides, useMarkers: parseNullableBoolean(value) })}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="inherit">inherit</SelectItem>
+                      <SelectItem value="true">true</SelectItem>
+                      <SelectItem value="false">false</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <label className="label-meta">Publish labels</label>
+                  <Select
+                    value={repoOverrides.publishLabels == null ? 'inherit' : (repoOverrides.publishLabels ? 'true' : 'false')}
+                    onValueChange={(value) => setRepoOverrides({ ...repoOverrides, publishLabels: parseNullableBoolean(value) })}
+                  >
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="inherit">inherit</SelectItem>
+                      <SelectItem value="true">true</SelectItem>
+                      <SelectItem value="false">false</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
+              <Button onClick={saveRepoPRSettings} disabled={!selectedRepoId}>{prSaved ? '✓ Saved' : 'Save Repo Overrides'}</Button>
+            </div>
+          </div>
+        )}
+
         {/* ── Team & Invites ── */}
-        {section === 'team' && user?.role === 'admin' && (
+        {section === 'team' && canInviteMembers && (
           <div>
             <p className="label-meta mb-3" style={{ color: '#E85A1A' }}>// team</p>
             <h1 className="text-[clamp(1.4rem,2.5vw,2rem)] font-bold leading-none tracking-tight text-foreground mb-8">
@@ -299,7 +605,7 @@ export default function Settings() {
         )}
 
         {/* ── API Key ── */}
-        {section === 'api-key' && user?.role === 'admin' && (
+        {section === 'api-key' && canManageSystemApiKey && (
           <div>
             <p className="label-meta mb-3" style={{ color: '#E85A1A' }}>// ci-cd</p>
             <h1 className="text-[clamp(1.4rem,2.5vw,2rem)] font-bold leading-none tracking-tight text-foreground mb-8">
