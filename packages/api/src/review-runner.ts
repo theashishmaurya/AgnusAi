@@ -13,6 +13,11 @@ const SKILLS_PATH = path.join(require.resolve('@agnus-ai/reviewer'), '../../..',
 import { getRepo } from './graph-cache'
 import { createEmbeddingAdapter } from './embedding-factory'
 import type { GraphReviewContext } from '@agnus-ai/shared'
+import {
+  DEFAULT_REPO_PR_DESCRIPTION_SETTINGS,
+  normalizeRepoPRDescriptionSettings,
+  resolveRepoPRDescriptionSettings,
+} from './repo-settings'
 
 // Sequential per-PR lock — prevents concurrent webhooks posting duplicate comments
 const prReviewLocks = new Map<string, Promise<void>>()
@@ -64,6 +69,10 @@ export interface ReviewRunOptions {
   incrementalReview?: boolean
   /** If true, skips posting comments and DB inserts — returns comments in the response for inspection */
   dryRun?: boolean
+  /** If false, skip PR title/body/labels write-back while still posting review comments */
+  updatePRDescription?: boolean
+  /** PR event action to evaluate created-only vs updated behavior */
+  prAction?: 'created' | 'updated' | 'opened' | 'synchronize' | 'manual'
 }
 
 export async function runReview(opts: ReviewRunOptions): Promise<{ verdict: string; commentCount: number; reviewId: string; comments?: any[] }> {
@@ -341,7 +350,72 @@ async function executeReview(opts: ReviewRunOptions, vcs: any, pool: Pool): Prom
   }
 
   // Post to GitHub/Azure (comment bodies now include feedback links)
-  await agent.postReview(prNumber, result)
+  // Resolve org-level defaults + repo-level overrides for PR description behavior
+  const orgIdentityRows = await pool.query<{ slug: string }>(
+    `SELECT o.slug
+     FROM repos r
+     JOIN organizations o ON o.id = r.org_id
+     WHERE r.repo_id = $1
+     LIMIT 1`,
+    [repoId],
+  )
+  const orgKey = orgIdentityRows.rows[0]?.slug ?? 'default'
+  const orgRows = await pool.query(
+    `SELECT
+       pr_description_enabled,
+       pr_description_update_mode,
+       pr_description_publish_mode,
+       pr_description_preserve_original,
+       pr_description_use_markers,
+       pr_description_publish_labels
+     FROM org_settings WHERE org_key = $1`,
+    [orgKey],
+  )
+  const orgSettings = orgRows.rows[0]
+    ? normalizeRepoPRDescriptionSettings(orgRows.rows[0] as any)
+    : DEFAULT_REPO_PR_DESCRIPTION_SETTINGS
+
+  const repoRows = await pool.query(
+    `SELECT
+       pr_description_enabled,
+       pr_description_update_mode,
+       pr_description_publish_mode,
+       pr_description_preserve_original,
+       pr_description_use_markers,
+       pr_description_publish_labels
+     FROM repo_settings WHERE repo_id = $1`,
+    [repoId],
+  )
+  const repoOverrides = repoRows.rows[0]
+    ? {
+        enabled: repoRows.rows[0].pr_description_enabled as boolean | null,
+        updateMode: repoRows.rows[0].pr_description_update_mode as any,
+        publishMode: repoRows.rows[0].pr_description_publish_mode as any,
+        preserveOriginal: repoRows.rows[0].pr_description_preserve_original as boolean | null,
+        useMarkers: repoRows.rows[0].pr_description_use_markers as boolean | null,
+        publishLabels: repoRows.rows[0].pr_description_publish_labels as boolean | null,
+      }
+    : {}
+  const prSettings = resolveRepoPRDescriptionSettings(orgSettings, repoOverrides)
+
+  const action = opts.prAction ?? 'manual'
+  const shouldRunForAction = prSettings.updateMode === 'created_and_updated'
+    ? (action === 'created' || action === 'updated' || action === 'opened' || action === 'synchronize' || action === 'manual')
+    : (action === 'created' || action === 'opened' || action === 'manual')
+  const shouldUpdatePRDescription =
+    (opts.updatePRDescription ?? true) &&
+    prSettings.enabled &&
+    shouldRunForAction
+
+  await agent.postReview(prNumber, result, {
+    updatePRDescription: shouldUpdatePRDescription,
+    prDescription: {
+      publishMode: prSettings.publishMode,
+      preserveOriginal: prSettings.preserveOriginal,
+      useMarkers: prSettings.useMarkers,
+      publishLabels: prSettings.publishLabels,
+    },
+  })
 
   return {
     verdict: (result as any).verdict ?? 'unknown',

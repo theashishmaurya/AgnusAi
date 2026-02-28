@@ -99,6 +99,15 @@ export interface ReviewResult {
   verdict: 'approve' | 'request_changes' | 'comment';
 }
 
+export type PRChangeType = 'bug' | 'feature' | 'refactor' | 'docs' | 'tests' | 'chore';
+
+export interface PRDescriptionResult {
+  title: string;
+  body: string;
+  changeType: PRChangeType;
+  labels: string[];
+}
+
 export interface CodeSuggestion {
   path: string;
   line: number;
@@ -113,6 +122,8 @@ export interface ReviewConfig {
   ignorePaths: string[];
   /** Minimum confidence threshold for comments (0.0–1.0). Default: 0.7 */
   precisionThreshold?: number;
+  /** Generate and write PR title/body/labels after review (default: true) */
+  enablePRDescription?: boolean;
 }
 
 export interface Skill {

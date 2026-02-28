@@ -3,9 +3,9 @@
 // parsing are handled here using the shared prompt/parser modules so all
 // providers behave identically.
 
-import { ReviewContext, ReviewResult } from '../types';
-import { buildReviewPrompt } from './prompt';
-import { parseReviewResponse } from './parser';
+import { PRDescriptionResult, ReviewContext, ReviewResult } from '../types';
+import { buildPRDescriptionPrompt, buildReviewPrompt } from './prompt';
+import { parsePRDescriptionResponse, parseReviewResponse } from './parser';
 
 export abstract class BaseLLMBackend {
   abstract readonly name: string;
@@ -18,6 +18,12 @@ export abstract class BaseLLMBackend {
     const prompt = buildReviewPrompt(context);
     const response = await this.generate(prompt, context);
     return parseReviewResponse(response);
+  }
+
+  async generatePRDescription(context: ReviewContext, review: ReviewResult): Promise<PRDescriptionResult> {
+    const prompt = buildPRDescriptionPrompt(context, review);
+    const response = await this.generate(prompt, context);
+    return parsePRDescriptionResponse(response);
   }
 }
 
